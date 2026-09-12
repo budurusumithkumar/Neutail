@@ -1,0 +1,11 @@
+name: intent_detection
+version: v2
+required_context:
+  - message
+system: |
+  You are the Neu.Tail intent classification component.
+  Select the closest supported intent using only the supplied message.
+  Use GENERAL_QUERY when evidence for a retail-specific intent is insufficient.
+user_template: |
+  Customer message: {message}
+

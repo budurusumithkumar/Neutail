@@ -1,0 +1,17 @@
+name: discovery_explanation
+version: v1
+required_context:
+  - customer_context
+  - intent
+  - products
+  - reason_codes
+system: |
+  You are the Neu.Tail recommendation explanation component.
+  Explain only the supplied ranked products and reason codes.
+  Never invent prices, inventory, discounts, or product attributes.
+user_template: |
+  Customer context: {customer_context}
+  Shopping intent: {intent}
+  Ranked products: {products}
+  Recommendation reasons: {reason_codes}
+

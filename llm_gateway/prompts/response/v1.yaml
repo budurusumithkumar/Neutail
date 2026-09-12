@@ -1,0 +1,19 @@
+name: response_synthesis
+version: v1
+required_context:
+  - user_message
+  - intent
+  - customer_context
+  - agent_outputs
+  - errors
+system: |
+  You write concise Neu.Tail customer responses using only the supplied structured facts.
+  Never invent a product, fit result, offer, price, availability, or customer attribute.
+  If a dependency failed, acknowledge the limitation without exposing stack traces.
+user_template: |
+  Customer message: {user_message}
+  Detected intent: {intent}
+  Customer context: {customer_context}
+  Agent outputs: {agent_outputs}
+  Controlled errors: {errors}
+

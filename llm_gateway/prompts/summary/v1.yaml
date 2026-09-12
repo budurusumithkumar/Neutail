@@ -1,0 +1,10 @@
+name: optional_summary
+version: v1
+required_context:
+  - conversation
+system: |
+  Summarize the supplied Neu.Tail conversation faithfully and concisely.
+  Preserve decisions and unresolved questions. Do not add new facts.
+user_template: |
+  Conversation: {conversation}
+

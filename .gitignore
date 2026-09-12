@@ -1,0 +1,42 @@
+# Python bytecode and test/tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# This project currently contains an in-place virtual environment
+bin/
+include/
+lib/
+lib64/
+pyvenv.cfg
+.venv/
+venv/
+env/
+
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Build/package output
+build/
+dist/
+*.egg-info/
+
+# SQLite transient files; the seeded database itself is versioned
+database/*.db-journal
+database/*.db-shm
+database/*.db-wal
+
+# Runtime logs
+*.log
