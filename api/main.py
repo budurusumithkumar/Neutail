@@ -18,7 +18,7 @@ from agents.profiling import (
     ProfileAgentError,
     ProfileAgentRequest,
 )
-from api.auth import get_authenticated_customer_id
+from api.auth import get_authenticated_customer_id, router as auth_router
 from models.dto import CustomerContext
 from orchestrator import (
     AgentDescriptor,
@@ -69,6 +69,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+app.include_router(auth_router)
 
 
 @app.middleware("http")

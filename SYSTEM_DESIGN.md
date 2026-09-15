@@ -21,9 +21,9 @@ executable application is a vertical slice for customer profiling:
 
 Discovery, Fit, and Upsell agent entry-point files are placeholders. Their
 domain services, DTOs, and most tool capabilities already exist and form the
-extension surface for future slices. There is no token-issuing authentication
-service or durable session-context store yet; the chat API validates a signed
-demo JWT and keeps sessions in process-local memory.
+extension surface for future slices. The authentication boundary issues and
+validates signed demo JWTs, while token revocation and session context remain
+process-local.
 
 ## 2. Design goals
 
@@ -160,6 +160,9 @@ flowchart TB
 | Method and path | Input | Output | Failure behavior |
 | --- | --- | --- | --- |
 | `GET /health` | None | Service, agent, and LangSmith status | Normal FastAPI error handling |
+| `POST /api/v1/auth/login` | Customer email and shared demo password | Bearer access token and `AuthUser` | Invalid credentials `401`; missing auth configuration `503`; invalid input `422` |
+| `GET /api/v1/auth/me` | Signed Bearer JWT | `AuthUser` | Missing, invalid, expired, or revoked token `401` |
+| `POST /api/v1/auth/logout` | Signed Bearer JWT | Empty response | Missing, invalid, expired, or revoked token `401` |
 | `POST /api/v1/chat` | `ChatRequest` JSON and signed Bearer JWT | `OrchestratorResponse` | Missing/invalid token `401`; unknown customer `404`; cross-customer session `409`; dependency failure `503`; invalid input `422` |
 | `GET /api/v1/agents` | None | Agent descriptors and implementation status | Registry initialization is fail-fast |
 | `POST /api/v1/profile` | `ProfileAgentRequest` JSON | `CustomerContext` | Unknown customer `404`; workflow failure `503`; invalid input `422` |
@@ -515,7 +518,10 @@ Uvicorn process
 Configuration is environment-based:
 
 - `NEUTAIL_DATABASE_URL` overrides the bundled SQLite URL;
-- `NEUTAIL_JWT_SECRET` supplies the HS256 chat-token validation secret;
+- `NEUTAIL_JWT_SECRET` supplies the HS256 token signing/validation secret;
+- `NEUTAIL_DEMO_PASSWORD` supplies the shared local-demo login password;
+- `NEUTAIL_ACCESS_TOKEN_TTL_SECONDS` optionally changes the one-hour token
+  lifetime, up to one day;
 - `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, and `LANGSMITH_PROJECT` control
   tracing;
 - provider API keys are required only for LLM routes used in a demo;
@@ -543,8 +549,10 @@ Current controls:
 
 Demo limitations:
 
-- Token issuance, logout/revocation, audience validation, and authorization
-  beyond the JWT customer subject are not implemented.
+- Customer passwords and roles are not stored. Every seeded customer uses one
+  environment-configured demo password and receives the `customer` role.
+- Logout revocation is process-local; audience/issuer validation and
+  authorization beyond the JWT customer subject are not implemented.
 - There is no rate limiting, request-size policy, or network-level MCP security.
 - The session identifier remains caller-provided and process-local.
 - Secrets are expected through environment variables; no secret manager exists.

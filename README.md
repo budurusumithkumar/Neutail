@@ -38,15 +38,30 @@ curl -X POST "http://127.0.0.1:8000/api/v1/profile" \
 Set `refresh=true` to rebuild cached context. The permitted MCP contracts can
 be inspected at `/api/v1/agents/profiling/tools`.
 
-## Orchestrated chat
+## Authentication and orchestrated chat
 
-The chat boundary requires a signed HS256 Bearer JWT with `sub` set to the
-customer ID and a future `exp` timestamp. For a local demo, generate one with
-the same secret configured for the API:
+The UI contract exposes login, current-user, and logout endpoints. The seeded
+demo database has customer emails but no password hashes, so local login uses a
+shared password from the environment. Configure both demo secrets before
+starting the API:
 
 ```bash
 export NEUTAIL_JWT_SECRET="replace-with-a-long-random-demo-secret"
-export NEUTAIL_DEMO_TOKEN="$(./bin/python -c 'import datetime, jwt, os; print(jwt.encode({"sub": "CUST001", "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30)}, os.environ["NEUTAIL_JWT_SECRET"], algorithm="HS256"))')"
+export NEUTAIL_DEMO_PASSWORD="replace-with-a-demo-password"
+```
+
+Login using any seeded customer email and the configured demo password:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/auth/login" \
+  -H "content-type: application/json" \
+  -d '{"email":"olivia.hart1@demo.neutail.local","password":"replace-with-a-demo-password"}'
+```
+
+Use the response's `access_token` as the Bearer token for authenticated routes:
+
+```bash
+export NEUTAIL_DEMO_TOKEN="paste-login-access-token-here"
 
 curl -X POST "http://127.0.0.1:8000/api/v1/chat" \
   -H "content-type: application/json" \
@@ -54,6 +69,10 @@ curl -X POST "http://127.0.0.1:8000/api/v1/chat" \
   -H "x-request-id: demo-chat-1" \
   -d '{"session_id":"demo-session","message":"Show me my profile"}'
 ```
+
+`GET /api/v1/auth/me` returns the authenticated customer, and
+`POST /api/v1/auth/logout` revokes the presented token until its expiry. Login
+and logout state are intentionally process-local demo behavior.
 
 Inspect the current agent registry at `GET /api/v1/agents`. Reuse the same
 `session_id` and customer token to demonstrate multi-turn context preservation.
