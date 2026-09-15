@@ -1,20 +1,21 @@
-# Neu.Tail Mission 4 — Orchestrator and Profiling Agent
+# Neu.Tail Mission 4 — Orchestrator, Profile, and Discovery Agents
 
 See [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md) for the as-built component design,
 runtime flows, tool permissions, persistence model, observability, and known
 demo limitations.
 
-This slice implements the deterministic Profiling Agent and its FastAPI
-boundary. The agent discovers exactly five read-only capabilities from its
-FastMCP-scoped registry, enriches profile facts in a LangGraph workflow, derives
-the Neu.Tail segment without an LLM, and caches the resulting `CustomerContext`
-per customer/session.
+This slice implements the deterministic Profiling Agent and Discovery Agent.
+Profile builds and caches `CustomerContext`; Discovery consumes that context,
+uses an exact four-tool FastMCP scope, supports structured, semantic,
+similar-item, and hybrid retrieval, filters live inventory and hard constraints,
+then applies explainable segment-aware ranking.
 
 The LangGraph orchestrator adds identity validation, multi-turn session state,
 hybrid intent detection, runtime capability discovery, deterministic agent
 planning, structured invocation, response synthesis, and trace propagation.
-Profile requests execute end to end. Discovery, Fit, and Upsell are reported as
-unavailable instead of duplicating their domain decisions in the orchestrator.
+Profile and Discovery requests execute end to end. Fit and Upsell remain
+separate and are reported as unavailable instead of having their decisions
+duplicated in Discovery or the orchestrator.
 
 ## Run
 
@@ -74,6 +75,13 @@ curl -X POST "http://127.0.0.1:8000/api/v1/chat" \
 `POST /api/v1/auth/logout` revokes the presented token until its expiry. Login
 and logout state are intentionally process-local demo behavior.
 
+The UI header/profile panel can load its compact customer record with:
+
+```bash
+curl "http://127.0.0.1:8000/api/v1/customers/me/summary" \
+  -H "authorization: Bearer ${NEUTAIL_DEMO_TOKEN}"
+```
+
 Create a UI session before sending chat messages. The request body is optional;
 its `channel` can be `web`, `mobile`, or `demo` and defaults to `web`:
 
@@ -103,6 +111,20 @@ must be explicitly configured; the API does not use a wildcard origin.
 Inspect the current agent registry at `GET /api/v1/agents`. Reuse the same
 `session_id` and customer token to demonstrate multi-turn context preservation.
 
+Try hybrid product discovery through the same chat route:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/chat" \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer ${NEUTAIL_DEMO_TOKEN}" \
+  -d '{"session_id":"demo-session","message":"Find me an elegant navy dress for a wedding under £500"}'
+```
+
+The response includes a structured `discovery_result` with the retrieval
+strategy, ranked recommendations, score components/reason codes, counts, and
+downstream signals. Inventory and exact price constraints are enforced outside
+the vector index.
+
 ## LangSmith
 
 Export the values shown in `.env.example` before starting Uvicorn. LangGraph
@@ -113,7 +135,7 @@ provider key is needed because profiling is deterministic and makes no LLM call.
 ## LLM Gateway
 
 All conversational model calls go through `LLMGateway.invoke()`. Agents provide
-a business use case such as `intent_detection` or `product_explanation`; the
+a business use case such as `intent_detection` or `discovery_explanation`; the
 gateway owns prompt versioning, provider routing, structured-output validation,
 fallback, token/cost accounting, and sanitized LangSmith traces.
 
@@ -139,6 +161,11 @@ uses deterministic rules for clear intent and the gateway's `intent/v3` prompt
 for ambiguity. Set `NEUTAIL_RESPONSE_SYNTHESIS_LLM=true` to verbalize structured
 results through the governed `response_synthesis` route; otherwise it uses
 deterministic response templates.
+
+Discovery ranking never uses an LLM. Set
+`NEUTAIL_DISCOVERY_EXPLANATIONS_LLM=true` only to add governed explanations to
+the already-ranked products; an explanation failure leaves the recommendations
+intact.
 
 ## Verify
 

@@ -216,6 +216,40 @@ def test_auth_openapi_contract_uses_bearer_auth():
     ]
 
 
+def test_authenticated_customer_summary_matches_ui_contract():
+    with TestClient(app) as client:
+        headers = _login_headers(client)
+        response = client.get(
+            "/api/v1/customers/me/summary",
+            headers=headers,
+        )
+        unauthorized = client.get("/api/v1/customers/me/summary")
+        operation = client.get("/openapi.json").json()["paths"][
+            "/api/v1/customers/me/summary"
+        ]["get"]
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "customer_id": "CUST001",
+        "display_name": "Olivia Hart",
+        "city": "London",
+        "segment": "Prestige Champion",
+        "loyalty_tier": "Platinum",
+        "points_balance": 16890,
+        "preferred_categories": ["Dresses", "Outerwear"],
+        "preferred_colors": ["Navy", "Burgundy", "Black"],
+        "preferred_styles": ["Classic", "Tailored"],
+        "usual_size": "12",
+        "fit_preference": "Tailored",
+    }
+    assert unauthorized.status_code == 401
+    assert operation["operationId"] == "getCustomerSummary"
+    assert operation["security"] == [{"BearerAuth": []}]
+    assert operation["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ] == {"$ref": "#/components/schemas/CustomerSummary"}
+
+
 def test_authenticated_session_lifecycle_and_sanitized_context():
     with TestClient(app) as client:
         headers = _login_headers(client)

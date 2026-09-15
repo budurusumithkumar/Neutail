@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from agents.discovery import DiscoveryAgent, DiscoveryRequest
 from agents.profiling import ProfileAgent, ProfileAgentRequest
+from llm_gateway import LLMGateway
 from orchestrator.models import (
     AgentDescriptor,
     AgentResult,
@@ -12,7 +14,11 @@ from orchestrator.models import (
     NeuTailState,
 )
 from tools.contracts import ToolDescriptor
-from tools.permissions import AgentName, PROFILE_AGENT_TOOLS
+from tools.permissions import (
+    AgentName,
+    DISCOVERY_AGENT_TOOLS,
+    PROFILE_AGENT_TOOLS,
+)
 
 
 class AgentUnavailableError(RuntimeError):
@@ -64,6 +70,45 @@ class ProfilingAgentAdapter:
         )
 
 
+class DiscoveryAgentAdapter:
+    """Adapt DiscoveryAgent without leaking orchestrator concerns into it."""
+
+    def __init__(self, agent: DiscoveryAgent) -> None:
+        self.agent = agent
+
+    async def execute(
+        self, state: NeuTailState, tools: list[ToolDescriptor]
+    ) -> AgentResult:
+        discovered_names = {tool.name for tool in tools}
+        if discovered_names != DISCOVERY_AGENT_TOOLS:
+            raise AgentDependencyError(
+                "Discovery Agent capability mismatch: "
+                f"expected={sorted(DISCOVERY_AGENT_TOOLS)}, "
+                f"actual={sorted(discovered_names)}"
+            )
+
+        request = state["request"]
+        result = await self.agent.execute(
+            DiscoveryRequest(
+                query=request.message,
+                customer_context=state["customer_context"],
+                session_context=state["session"],
+                trace_id=request.trace_id,
+            )
+        )
+        successful = result.status in {"SUCCESS", "NO_RESULTS"}
+        return AgentResult(
+            agent_name=AgentName.DISCOVERY,
+            status=(
+                AgentRunStatus.SUCCESS if successful else AgentRunStatus.FAILED
+            ),
+            state_updates={
+                "discovery_result": result.model_dump(mode="json")
+            },
+            error=None if successful else "DISCOVERY_FAILED",
+        )
+
+
 _DESCRIPTORS = (
     AgentDescriptor(
         name=AgentName.PROFILING,
@@ -80,9 +125,14 @@ _DESCRIPTORS = (
     AgentDescriptor(
         name=AgentName.DISCOVERY,
         display_name="DiscoveryAgent",
-        capabilities=["product-search", "personalized-ranking"],
+        capabilities=[
+            "structured-product-search",
+            "semantic-product-search",
+            "inventory-filtering",
+            "deterministic-personalized-ranking",
+        ],
         supported_intents=["PRODUCT_DISCOVERY"],
-        implemented=False,
+        implemented=True,
     ),
     AgentDescriptor(
         name=AgentName.FIT,
@@ -104,11 +154,20 @@ _DESCRIPTORS = (
 class AgentRegistry:
     """Own agent metadata while keeping domain execution in specialised agents."""
 
-    def __init__(self, profile_agent: ProfileAgent | None = None) -> None:
+    def __init__(
+        self,
+        profile_agent: ProfileAgent | None = None,
+        discovery_agent: DiscoveryAgent | None = None,
+        llm_gateway: LLMGateway | None = None,
+    ) -> None:
         self._adapters: dict[AgentName, OrchestratedAgent] = {
             AgentName.PROFILING: ProfilingAgentAdapter(
                 profile_agent or ProfileAgent()
-            )
+            ),
+            AgentName.DISCOVERY: DiscoveryAgentAdapter(
+                discovery_agent
+                or DiscoveryAgent(llm_gateway=llm_gateway or LLMGateway())
+            ),
         }
         self._descriptors = {item.name: item for item in _DESCRIPTORS}
 
@@ -147,7 +206,7 @@ __all__ = [
     "AgentDependencyError",
     "AgentRegistry",
     "AgentUnavailableError",
+    "DiscoveryAgentAdapter",
     "OrchestratedAgent",
     "ProfilingAgentAdapter",
 ]
-

@@ -49,6 +49,7 @@ def test_every_configured_route_resolves_a_versioned_prompt():
     prompts = PromptRegistry()
 
     assert router.list_use_cases() == [
+        "discovery_explanation",
         "fit_explanation",
         "intent_detection",
         "optional_summary",
@@ -60,6 +61,13 @@ def test_every_configured_route_resolves_a_versioned_prompt():
         route = router.resolve(use_case)
         prompt = prompts.load(route.prompt_group, route.default_prompt_version)
         assert prompt.version == route.default_prompt_version
+
+
+def test_discovery_prompt_forbids_fact_invention_and_reranking():
+    prompt = PromptRegistry().load("discovery", "v1")
+
+    assert "Do not change, reorder, add, or remove" in prompt.system
+    assert "Never invent SKUs, prices, inventory" in prompt.system
 
 
 def test_default_gateway_is_wired_to_litellm_acompletion():

@@ -6,24 +6,16 @@ from models.dto import (
     InventoryRecord,
     InventorySummary,
     Product,
-    ProductSearchCriteria,
-    ProductSearchResult,
+    ProductCandidate,
+    ProductSearchInput,
+    SemanticProductMatch,
+    SemanticProductSearchInput,
 )
 from services.inventory_service import InventoryService
 from services.product_catalog_service import ProductCatalogService
+from services.product_retrieval_service import ProductRetrievalService
 from tools.contracts import tool_contract
 from tools.runtime import get_runtime
-
-
-@tool_contract(
-    name="product_search",
-    title="Search Products",
-    description="Search active catalogue facts with structured filters; results are not personalized or ranked.",
-    capability="product.catalog.search",
-)
-def product_search(criteria: ProductSearchCriteria) -> ProductSearchResult:
-    with get_runtime().session() as session:
-        return ProductCatalogService(session).search_products(criteria)
 
 
 @tool_contract(
@@ -35,28 +27,6 @@ def product_search(criteria: ProductSearchCriteria) -> ProductSearchResult:
 def product_get(sku: str) -> Product:
     with get_runtime().session() as session:
         return ProductCatalogService(session).get_product(sku)
-
-
-@tool_contract(
-    name="product_get_many",
-    title="Get Products",
-    description="Fetch many SKUs in one query while preserving requested order and omitting unknown SKUs.",
-    capability="product.catalog.bulk_get",
-)
-def product_get_many(skus: list[str]) -> list[Product]:
-    with get_runtime().session() as session:
-        return ProductCatalogService(session).get_products(skus)
-
-
-@tool_contract(
-    name="product_is_active",
-    title="Check Product Active",
-    description="Confirm that a SKU exists and is active for recommendation consideration.",
-    capability="product.catalog.active",
-)
-def product_is_active(sku: str) -> bool:
-    with get_runtime().session() as session:
-        return ProductCatalogService(session).is_active(sku)
 
 
 @tool_contract(
@@ -103,15 +73,65 @@ def inventory_get_available_skus(skus: list[str]) -> dict[str, bool]:
         return InventoryService(session).get_available_skus(skus)
 
 
+@tool_contract(
+    name="search_products",
+    title="Search Products for Discovery",
+    description="Retrieve factual active catalogue candidates using exact structured constraints; no personalization is applied.",
+    capability="discovery.catalog.search",
+)
+def search_products(criteria: ProductSearchInput) -> list[ProductCandidate]:
+    with get_runtime().session() as session:
+        result = ProductCatalogService(session).search_products(
+            criteria.to_catalog_criteria()
+        )
+        return [ProductCandidate.model_validate(item) for item in result.products]
+
+
+@tool_contract(
+    name="get_product_details",
+    title="Get Discovery Product Details",
+    description="Fetch authoritative product facts for one semantic retrieval SKU.",
+    capability="discovery.catalog.details",
+)
+def get_product_details(sku: str) -> Product:
+    with get_runtime().session() as session:
+        return ProductCatalogService(session).get_product(sku)
+
+
+@tool_contract(
+    name="check_inventory",
+    title="Check Discovery Candidate Inventory",
+    description="Bulk-check live authoritative availability for discovery candidates.",
+    capability="discovery.inventory.bulk_available",
+)
+def check_inventory(skus: list[str]) -> dict[str, bool]:
+    with get_runtime().session() as session:
+        return InventoryService(session).get_available_skus(skus)
+
+
+@tool_contract(
+    name="semantic_product_search",
+    title="Semantic Product Search",
+    description="Retrieve active product SKUs by semantic similarity over stable catalogue documents.",
+    capability="discovery.vector.search",
+)
+def semantic_product_search(
+    request: SemanticProductSearchInput,
+) -> list[SemanticProductMatch]:
+    with get_runtime().session() as session:
+        return ProductRetrievalService(session).semantic_search(request)
+
+
 PRODUCT_TOOLS = (
-    product_search,
     product_get,
-    product_get_many,
-    product_is_active,
     inventory_get,
     inventory_get_by_location,
     inventory_is_available,
     inventory_get_available_skus,
+    search_products,
+    get_product_details,
+    check_inventory,
+    semantic_product_search,
 )
 
 

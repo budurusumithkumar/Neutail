@@ -65,6 +65,9 @@ def configure_runtime(database_url: Optional[str] = None) -> ToolRuntime:
         if _runtime is not None:
             _runtime.close()
         _runtime = ToolRuntime(database_url)
+        from services.product_retrieval_service import clear_product_vector_store
+
+        clear_product_vector_store()
         return _runtime
 
 

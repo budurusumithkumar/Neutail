@@ -4,26 +4,32 @@
 
 Neu.Tail is a demo retail-assistant backend organized around agent-scoped tools,
 deterministic domain services, and a controlled LLM gateway. The currently
-executable application is a vertical slice for customer profiling:
+executable application is a vertical slice for customer profiling and product
+discovery:
 
 - FastAPI exposes health, profile construction, and profile-tool discovery.
 - A LangGraph orchestrator validates identity, manages multi-turn state,
   detects intent, discovers capabilities, plans agents, and synthesizes one
   response.
 - A LangGraph `ProfileAgent` builds a normalized `CustomerContext`.
-- The agent discovers and calls only its five permitted FastMCP tools.
+- `DiscoveryAgent` consumes that context, selects structured, semantic,
+  similar-item, or hybrid retrieval, and ranks candidates deterministically.
+- Each implemented agent discovers and calls only its exact permitted FastMCP
+  tool set.
 - Tool adapters call deterministic domain services backed by SQLAlchemy and a
   seeded SQLite database.
 - LangSmith instruments API-triggered agent runs and individual tool calls.
+- A replaceable embedding provider and vector store live behind
+  `ProductRetrievalService`; inventory remains outside the index.
 - A LiteLLM-based gateway handles ambiguous orchestrator intent and optional
-  response prose; the deterministic ProfileAgent intentionally does not call
-  an LLM.
+  response/discovery prose; neither segmentation nor product ranking uses an
+  LLM.
 
-Discovery, Fit, and Upsell agent entry-point files are placeholders. Their
-domain services, DTOs, and most tool capabilities already exist and form the
-extension surface for future slices. The authentication boundary issues and
-validates signed demo JWTs, while token revocation and session context remain
-process-local.
+Fit and Upsell remain future specialised-agent slices. Discovery publishes
+ranked product data and engagement signals for those agents through the
+orchestrator, but never calculates fit or makes service-eligibility decisions.
+The authentication boundary issues and validates signed demo JWTs, while token
+revocation and session context remain process-local.
 
 ## 2. Design goals
 
@@ -42,19 +48,23 @@ flowchart LR
     User[Demo client / Web UI] -->|HTTP JSON| API[FastAPI agent API]
     API --> O[LangGraph orchestrator]
     O --> PA[LangGraph ProfileAgent]
+    O --> DA[DiscoveryAgent]
     O -->|identity and capability discovery| MCP
     PA -->|MCP discovery and calls| MCP[Agent-scoped FastMCP server]
+    DA -->|MCP discovery and calls| MCP
     MCP --> DS[Domain services]
     DS --> ORM[SQLAlchemy ORM]
     ORM --> DB[(Seeded SQLite database)]
 
     O -->|ambiguous intent / optional synthesis| GW[LLM Gateway]
-    O -.-> Future[Future Discovery / Fit / Upsell agents]
+    DA -->|optional ranked-product explanation| GW
+    O -.-> Future[Future Fit / Upsell agents]
     GW --> Lite[LiteLLM]
     Lite -.-> Providers[OpenAI / Gemini / Ollama]
 
     API -. request metadata .-> LS[LangSmith]
     PA -. graph and tool traces .-> LS
+    DA -. retrieval and ranking traces .-> LS
     GW -. sanitized LLM traces .-> LS
 ```
 
@@ -73,6 +83,7 @@ flowchart TB
 
     subgraph Agent[Agent layer]
         Graph[ProfileAgent LangGraph]
+        Discovery[DiscoveryAgent]
         Cache[Process-local profile cache]
         Rules[Deterministic segment classifier]
         Mapper[Profile fact and context mapper]
@@ -99,6 +110,7 @@ flowchart TB
         History[Order and return history]
         Loyalty[Loyalty and engagement]
         Product[Catalogue and inventory]
+        Retrieval[Product semantic retrieval]
         Fit[Fit evidence and risk]
         Upsell[Upsell eligibility and suppression]
     end
@@ -107,6 +119,7 @@ flowchart TB
         DTO[Pydantic DTOs]
         Entities[SQLAlchemy entities]
         SQLite[(neutail_demo.db)]
+        Vector[(Replaceable vector store)]
     end
 
     subgraph Models[Controlled model access]
@@ -124,6 +137,7 @@ flowchart TB
     Graph <--> Cache
     Graph --> Registry
     Graph --> Mapper
+    Discovery --> Registry
     Mapper --> Rules
     Registry --> Policy
     Registry --> Contracts
@@ -131,6 +145,7 @@ flowchart TB
     Adapters --> Runtime
     Runtime --> Domain
     Domain --> DTO
+    Retrieval --> Vector
     Domain --> Entities
     Entities --> SQLite
     Gateway --> Router
@@ -163,6 +178,7 @@ flowchart TB
 | `POST /api/v1/auth/login` | Customer email and shared demo password | Bearer access token and `AuthUser` | Invalid credentials `401`; missing auth configuration `503`; invalid input `422` |
 | `GET /api/v1/auth/me` | Signed Bearer JWT | `AuthUser` | Missing, invalid, expired, or revoked token `401` |
 | `POST /api/v1/auth/logout` | Signed Bearer JWT | Empty response | Missing, invalid, expired, or revoked token `401` |
+| `GET /api/v1/customers/me/summary` | Signed Bearer JWT | Compact `CustomerSummary` | Missing/invalid token or deleted customer `401` |
 | `POST /api/v1/sessions` | Signed Bearer JWT and optional channel | `SessionResponse` | Missing/invalid token `401`; invalid input `422` |
 | `GET /api/v1/sessions/{session_id}` | Signed Bearer JWT | `SessionResponse` | Missing/foreign session `404`; missing/invalid token `401` |
 | `DELETE /api/v1/sessions/{session_id}` | Signed Bearer JWT | Empty response | Missing/foreign session `404`; missing/invalid token `401` |
@@ -198,9 +214,9 @@ Clear profile, discovery, fit, and service requests are detected by transparent
 rules. Ambiguous text is sent to `LLMGateway.invoke()` with current session
 entities and a Pydantic `IntentResult`. The deterministic planner prepends
 Profiling only when `CustomerContext` is absent, then orders Discovery, Fit, and
-Upsell for primary and secondary intents. Unimplemented agents return a
-centralized `AGENT_UNAVAILABLE` result; the orchestrator never substitutes its
-own product-ranking, fit, or upsell logic.
+Upsell for primary and secondary intents. Discovery is implemented; Fit and
+Upsell return a centralized `AGENT_UNAVAILABLE` result. The orchestrator never
+substitutes its own product-ranking, fit, or upsell logic.
 
 Sessions are bound to the first customer identity that uses them. They retain
 category, occasion, selected SKU, requested size, customer context, last intent,
@@ -293,6 +309,33 @@ The final `CustomerContext` combines profile preferences, CLV, derived segment,
 12-month purchase aggregates, return rate, fit-risk score, loyalty state,
 engagement score, data-quality flags, and `profile_version="v1"`.
 
+### Discovery execution sequence
+
+```mermaid
+flowchart LR
+    O[Orchestrator] -->|CustomerContext + session + query| D[DiscoveryAgent]
+    D --> Q[Build criteria and select strategy]
+    Q -->|structured| ST[search_products MCP tool]
+    Q -->|semantic / hybrid / similar| VT[semantic_product_search MCP tool]
+    VT --> RS[ProductRetrievalService]
+    RS --> EP[EmbeddingProvider]
+    RS --> VS[(VectorStore)]
+    ST --> C[Candidate facts]
+    VT --> GD[get_product_details MCP tool]
+    GD --> C
+    C --> I[check_inventory MCP tool]
+    I --> H[Hard constraints]
+    H --> R[Deterministic segment-aware ranking]
+    R --> E[Optional LLMGateway explanation]
+    E --> OUT[DiscoveryResult + downstream signals]
+```
+
+Structured constraints such as category, colour, price, and size are never
+delegated to embeddings. Product embedding documents contain stable catalogue
+descriptors, not inventory or reservation data. Ranking exposes weighted score
+components and machine-readable reason codes. The result can flow to Fit, while
+`HIGH_PRODUCT_ENGAGEMENT` can flow to Upsell; Discovery invokes neither agent.
+
 ## 6. FastMCP tool design
 
 ### Registration and contracts
@@ -314,38 +357,42 @@ The registry supports:
 
 Agents receive a server containing only their allowlisted tools. A disallowed
 tool is absent during discovery and also rejected by direct registry lookup.
-The implemented ProfileAgent additionally verifies that discovery returns
-exactly its expected five-tool set before continuing.
+The implemented ProfileAgent and DiscoveryAgent additionally verify that
+runtime discovery returns their required tool scopes before continuing.
 
 | Agent scope | Capability groups in the current registry |
 | --- | --- |
 | Profiling | Aggregate profile, purchase, return, loyalty, and engagement summaries |
-| Discovery | Customer preference/fact reads, product catalogue, and inventory |
+| Discovery | `search_products`, `get_product_details`, `check_inventory`, and `semantic_product_search` |
 | Fit | Customer preferences, product facts, order/return evidence, inventory, and fit calculations |
 | Upsell | Customer and loyalty facts, return summary, product facts, engagement, eligibility, suppression, and decision recording |
 
-Only the Profiling scope has an implemented agent workflow today.
+Profiling and Discovery have implemented agent workflows today.
 
 ### Tool runtime
 
 `ToolRuntime` is lazily created once per process. It owns the SQLAlchemy engine,
-session factory, and process-local `UpsellPolicyState`. Every adapter opens a
+session factory, process-local vector index, and process-local
+`UpsellPolicyState`. Every adapter opens a
 short-lived session; read calls close without committing, while explicitly
 marked write calls commit and roll back on failure. The Profiling Agent uses an
 in-process FastMCP client/server transport, so no network hop is required.
 
 ## 7. Domain and data design
 
-Domain services receive an injected SQLAlchemy `Session`. They return DTOs, do
-not expose ORM objects across boundaries, and own deterministic validation and
-aggregation. The current code queries SQLAlchemy directly; a separate
-repository layer is not implemented.
+Domain services return DTOs, do not expose ORM objects across boundaries, and
+own deterministic validation and aggregation. Product and inventory services
+use explicit repository interfaces; SQLAlchemy is confined to those repository
+implementations. `ProductRetrievalService` owns embedding/index behavior behind
+provider-neutral protocols.
 
 | Service | Responsibility |
 | --- | --- |
 | `CustomerProfileService` | Customer existence, master data, normalized preferences, and profile facts |
 | `ProductCatalogService` | Factual structured search, single/bulk SKU lookup, and active-state checks |
 | `InventoryService` | Per-location and aggregate availability, including bulk checks |
+| `ProductRetrievalService` | Stable product documents, embedding refresh, metadata filtering, and top-k semantic SKU retrieval |
+| `ProductRepository` / `InventoryRepository` | SQLAlchemy persistence adapters below product-domain services |
 | `OrderHistoryService` | Orders, purchased items, recent sizes, and purchase summaries |
 | `ReturnHistoryService` | Return records, rates, reason summaries, and size/product evidence |
 | `FitProfileService` | Fit profile, brand adjustments, evidence construction, and deterministic risk |
@@ -422,13 +469,13 @@ normalize them to lists and dictionaries at the DTO boundary.
 ## 8. Controlled LLM gateway
 
 `LLMGateway` is the shared component for orchestrator intent detection, optional
-response synthesis, and future specialised-agent explanations. It is not called
-by the deterministic profiling flow and is not exposed directly through
-FastAPI.
+response synthesis, and optional Discovery explanations. It is not called by
+profiling or deterministic Discovery ranking and is not exposed directly
+through FastAPI.
 
 ```mermaid
 sequenceDiagram
-    participant X as Future agent/orchestrator
+    participant X as Agent/orchestrator
     participant G as LLMGateway
     participant R as ModelRouter
     participant P as PromptRegistry
@@ -451,6 +498,7 @@ sequenceDiagram
 ```
 
 Configured logical use cases are `intent_detection`, `product_explanation`,
+`discovery_explanation`,
 `fit_explanation`, `upsell_message`, `optional_summary`, and
 `response_synthesis`. Routes, limits, fallback models, and logging policy live
 in `llm_gateway/config/models.yaml`; trusted versioned prompts live under
@@ -475,6 +523,11 @@ logging.
 - `profile_agent`: top-level deterministic agent run;
 - `profile_agent_graph`: LangGraph execution and node activity;
 - `profile_tool_discovery`: scoped MCP discovery;
+- `discovery_agent`: top-level Discovery execution;
+- `build_discovery_criteria` and `select_retrieval_strategy`;
+- `semantic_product_search` and `vector_search` when applicable;
+- `check_inventory`, `apply_hard_constraints`, and `personalized_ranking`;
+- `discovery_explanation` and `publish_discovery_signals`;
 - one tool trace per FastMCP invocation;
 - `llm_gateway.invoke`: governed logical model call;
 - `litellm.acompletion`: one trace per physical provider attempt.
@@ -492,6 +545,9 @@ safe to disable for local tests.
 | Session reused by another customer | Session service rejects it; chat API returns structured `409` |
 | Planned agent not implemented | Orchestrator records `AGENT_UNAVAILABLE` and returns a controlled partial response |
 | Missing/mismatched profile tool scope | Graph stops with a discovery error; API returns `503` |
+| Missing/mismatched Discovery tool scope | Orchestrator records a dependency/execution error and does not fabricate recommendations |
+| Discovery explanation unavailable | Ranked products are returned with `explanation=null` |
+| No in-stock constrained candidates | Successful `NO_RESULTS` Discovery result |
 | Optional enrichment unavailable | Profile still publishes with defaults and a data-quality flag |
 | Invalid request/response DTO | Pydantic rejects it at the relevant boundary |
 | Unknown LLM use case/prompt version | Gateway rejects before contacting a provider |
@@ -511,8 +567,12 @@ Uvicorn process
   │   └── agent registry and shared LLMGateway
   ├── one lifespan-owned ProfileAgent
   │   └── in-memory (session_id, customer_id) cache
+  ├── one registered DiscoveryAgent
+  │   ├── deterministic query strategy and ranking
+  │   └── optional shared-gateway explanations
   ├── one lazy ToolRuntime
   │   ├── SQLAlchemy engine/session factory
+  │   ├── in-memory product vector index
   │   └── in-memory upsell policy state
   ├── in-process FastMCP servers/clients
   ├── optional LLMGateway instances
@@ -534,6 +594,8 @@ Configuration is environment-based:
 - `LITELLM_LOCAL_MODEL_COST_MAP=True` keeps LiteLLM model-cost data local.
 - `NEUTAIL_RESPONSE_SYNTHESIS_LLM=true` opts into governed LLM prose
   synthesis; deterministic templates are the default.
+- `NEUTAIL_DISCOVERY_EXPLANATIONS_LLM=true` opts into explanations after
+  deterministic ranking; the default is `false`.
 
 The application is started with:
 
@@ -575,10 +637,11 @@ The design is intentionally single-process. Before production use:
    verification, audience/issuer policy, rotation, and customer authorization.
 2. Move session lifecycle and revocation state into a shared store before
    running multiple API workers.
-3. Implement Discovery, Fit, and Upsell agent workflows against their scoped
-   FastMCP servers and route every model call through `LLMGateway`.
-4. Move SQLite to a managed relational database and add a repository layer if
-   multiple persistence implementations are required.
+3. Implement Fit and Upsell workflows against their scoped FastMCP servers;
+   consume Discovery recommendations/signals without moving their decisions
+   into Discovery.
+4. Move SQLite to a managed relational database and provide repository
+   implementations for the remaining service areas.
 5. Replace process-local profile cache and upsell state with a TTL-based shared
    store; define invalidation from customer/order/return events.
 6. Persist model-call audit records and define retention/redaction policy.
@@ -599,6 +662,13 @@ The current automated suite covers:
 - health, GET/POST profile, tool discovery, headers, and API error mapping;
 - orchestrated profile chat, runtime agent discovery, compound planning,
   multi-turn reuse, identity binding, and unavailable-agent fallback;
+- Discovery query/strategy selection, structured/semantic/hybrid retrieval,
+  deterministic segment ranking, hard price/inventory filtering, reason codes,
+  vector score contribution, no-results behavior, explanation fallback, and
+  engagement signals;
+- exact Discovery tool scope and static boundary checks preventing direct SQL,
+  vector-store, model-provider, Fit, or Upsell access;
+- the authenticated chat API's structured `discovery_result` contract;
 - LLM route/prompt resolution, direct LiteLLM wiring, structured output,
   retries, fallback, telemetry, and sanitized tracing behavior.
 

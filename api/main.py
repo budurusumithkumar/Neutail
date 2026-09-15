@@ -20,8 +20,10 @@ from agents.profiling import (
     ProfileAgentRequest,
 )
 from api.auth import get_authenticated_customer_id, router as auth_router
+from api.customers import router as customers_router
 from api.sessions import router as sessions_router
 from models.dto import CustomerContext
+from llm_gateway import LLMGateway
 from orchestrator import (
     AgentDescriptor,
     AgentRegistry,
@@ -84,10 +86,12 @@ class HealthResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     profile_agent = ProfileAgent()
-    agent_registry = AgentRegistry(profile_agent)
+    llm_gateway = LLMGateway()
+    agent_registry = AgentRegistry(profile_agent, llm_gateway=llm_gateway)
     app.state.profile_agent = profile_agent
     app.state.orchestrator = NeuTailOrchestrator(
         agent_registry=agent_registry,
+        llm_gateway=llm_gateway,
         session_service=SessionContextService(),
     )
     yield
@@ -112,6 +116,7 @@ app.add_middleware(
     max_age=600,
 )
 app.include_router(auth_router)
+app.include_router(customers_router)
 app.include_router(sessions_router)
 
 

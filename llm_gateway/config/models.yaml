@@ -29,6 +29,21 @@ routes:
       log_request_body: false
       log_response_body: false
 
+  discovery_explanation:
+    logical_model: general
+    primary_model: openai/gpt-5
+    fallback_model: gemini/gemini-2.5-pro
+    prompt_group: discovery
+    default_prompt_version: v1
+    policy:
+      temperature: 0.3
+      max_tokens: 300
+      timeout_seconds: 15
+      allow_fallback: true
+      structured_output_retries: 1
+      log_request_body: false
+      log_response_body: false
+
   fit_explanation:
     logical_model: general
     primary_model: openai/gpt-5

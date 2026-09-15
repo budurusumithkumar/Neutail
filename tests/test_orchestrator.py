@@ -124,7 +124,12 @@ def test_compound_request_builds_ordered_deterministic_plan():
     ]
     assert result.extracted_entities["category"] == "Dresses"
     assert result.extracted_entities["occasion"] == "Wedding"
-    assert result.completed_agents == [AgentName.PROFILING]
+    assert result.completed_agents == [
+        AgentName.PROFILING,
+        AgentName.DISCOVERY,
+    ]
+    assert result.discovery_result is not None
+    assert result.discovery_result["status"] in {"SUCCESS", "NO_RESULTS"}
 
 
 def test_ambiguous_intent_uses_llm_gateway_and_merges_entities():
@@ -193,11 +198,11 @@ def test_unknown_customer_and_cross_customer_session_are_rejected():
     asyncio.run(scenario())
 
 
-def test_agent_registry_reports_only_profile_as_implemented():
+def test_agent_registry_reports_profile_and_discovery_as_implemented():
     descriptors = NeuTailOrchestrator().agent_registry.list_agents()
     implemented = {item.name for item in descriptors if item.implemented}
 
-    assert implemented == {AgentName.PROFILING}
+    assert implemented == {AgentName.PROFILING, AgentName.DISCOVERY}
     assert {item.name for item in descriptors} == set(AgentName)
 
 
@@ -228,3 +233,41 @@ def test_chat_api_uses_boundary_customer_identity_and_exposes_agents():
         "fit_agent",
         "upsell_agent",
     }
+
+
+def test_chat_api_returns_structured_discovery_contract():
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/chat",
+            headers={
+                "authorization": f"Bearer {_access_token('CUST001')}",
+                "x-request-id": "discovery-contract-trace",
+            },
+            json={
+                "session_id": "api-discovery-session",
+                "message": "Find me an elegant navy dress for a wedding under £500",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "PRODUCT_DISCOVERY"
+    assert payload["completed_agents"] == [
+        "profiling_agent",
+        "discovery_agent",
+    ]
+    discovery = payload["discovery_result"]
+    assert discovery["status"] in {"SUCCESS", "NO_RESULTS"}
+    assert discovery["retrieval_strategy"] == "HYBRID"
+    assert isinstance(discovery["recommendations"], list)
+    assert isinstance(discovery["downstream_signals"], list)
+    for recommendation in discovery["recommendations"]:
+        assert {
+            "sku",
+            "product_name",
+            "price_gbp",
+            "brand",
+            "score",
+            "reason_codes",
+            "explanation",
+        }.issubset(recommendation)

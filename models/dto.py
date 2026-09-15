@@ -178,6 +178,22 @@ class CustomerContext(DTOModel):
         return self
 
 
+class CustomerSummary(DTOModel):
+    """Compact authenticated customer record displayed by the UI."""
+
+    customer_id: str
+    display_name: str
+    city: Optional[str] = None
+    segment: Optional[str] = None
+    loyalty_tier: Optional[str] = None
+    points_balance: Optional[int] = None
+    preferred_categories: list[str] = Field(default_factory=list)
+    preferred_colors: list[str] = Field(default_factory=list)
+    preferred_styles: list[str] = Field(default_factory=list)
+    usual_size: Optional[str] = None
+    fit_preference: Optional[str] = None
+
+
 class LoyaltyDTO(DTOModel):
     """Current loyalty tier and points state."""
 
@@ -233,6 +249,24 @@ class Product(DTOModel):
     exclusive_flag: Optional[bool] = None
     private_label_flag: Optional[bool] = None
     active: Optional[bool] = None
+
+
+class ProductCandidate(Product):
+    """Complete factual catalogue candidate returned to Discovery."""
+
+    product_name: str
+    category: str
+    brand: str
+    brand_tier: str
+    color: str
+    style: str
+    occasion: str
+    base_price_gbp: float = Field(ge=0)
+    current_price_gbp: float = Field(ge=0)
+    discount_pct: int = Field(ge=0, le=100)
+    new_arrival: bool
+    exclusive_flag: bool
+    private_label_flag: bool
 
 
 class ProductDTO(Product):
@@ -539,6 +573,51 @@ class ProductSearchCriteria(DTOModel):
 ProductSearchRequest = ProductSearchCriteria
 
 
+class ProductSearchInput(DTOModel):
+    """Structured catalogue constraints exposed to the Discovery Agent."""
+
+    category: Optional[str] = None
+    subcategory: Optional[str] = None
+    occasion: Optional[str] = None
+    colors: list[str] = Field(default_factory=list)
+    styles: list[str] = Field(default_factory=list)
+    brand_tier: Optional[str] = None
+    min_price: Optional[float] = Field(default=None, ge=0)
+    max_price: Optional[float] = Field(default=None, ge=0)
+    sizes: list[str] = Field(default_factory=list)
+    active: bool = True
+    limit: int = Field(default=30, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def validate_price_range(self) -> "ProductSearchInput":
+        if (
+            self.min_price is not None
+            and self.max_price is not None
+            and self.min_price > self.max_price
+        ):
+            raise ValueError("min_price cannot exceed max_price")
+        return self
+
+    def to_catalog_criteria(self) -> ProductSearchCriteria:
+        return ProductSearchCriteria.model_validate(self.model_dump())
+
+
+class SemanticProductSearchInput(DTOModel):
+    """Semantic catalogue query with optional stable metadata filters."""
+
+    query: str = Field(min_length=1, max_length=2_000)
+    category: Optional[str] = None
+    occasion: Optional[str] = None
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class SemanticProductMatch(DTOModel):
+    """Vector retrieval result; facts are fetched separately by SKU."""
+
+    sku: str
+    similarity_score: float = Field(ge=0, le=1)
+
+
 class ProductSearchResult(DTOModel):
     """Catalogue matches and the factual criteria used to retrieve them."""
 
@@ -608,6 +687,7 @@ __all__ = [
     "CustomerProfileDTO",
     "CustomerProfileFacts",
     "CustomerProfileSnapshot",
+    "CustomerSummary",
     "DTOModel",
     "DemoScenarioDTO",
     "FitEvidence",
@@ -627,9 +707,11 @@ __all__ = [
     "OrderDetailDTO",
     "OrderItemDTO",
     "Product",
+    "ProductCandidate",
     "ProductAvailabilityDTO",
     "ProductDTO",
     "ProductSearchCriteria",
+    "ProductSearchInput",
     "ProductSearchRequest",
     "ProductSearchResult",
     "PurchaseSummary",
@@ -642,6 +724,8 @@ __all__ = [
     "ServiceEngagement",
     "ServiceEngagementDTO",
     "SizeHistoryItem",
+    "SemanticProductMatch",
+    "SemanticProductSearchInput",
     "SuppressionResult",
     "UpsellDecision",
     "UpsellEvaluationInput",

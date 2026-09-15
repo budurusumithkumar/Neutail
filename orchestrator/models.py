@@ -124,6 +124,7 @@ class OrchestratorResponse(DTOModel):
     completed_agents: list[AgentName] = Field(default_factory=list)
     extracted_entities: dict[str, Optional[str]] = Field(default_factory=dict)
     customer_context: Optional[CustomerContext] = None
+    discovery_result: Optional[dict[str, Any]] = None
     agent_outputs: dict[str, Any] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
     turn_count: int = Field(ge=1)

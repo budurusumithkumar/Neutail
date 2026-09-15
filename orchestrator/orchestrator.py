@@ -156,6 +156,22 @@ class ResponseSynthesizer:
                 f"{context.segment}, with loyalty tier "
                 f"{context.loyalty_tier or 'not available'}."
             )
+        discovery = state.get("discovery_result")
+        if intent.intent == "PRODUCT_DISCOVERY" and discovery is not None:
+            if discovery.get("status") == "NO_RESULTS":
+                return (
+                    "I couldn't find an in-stock product matching those "
+                    "constraints. Try widening the colour, occasion, or price range."
+                )
+            recommendations = discovery.get("recommendations", [])
+            if recommendations:
+                names = [
+                    str(item.get("product_name"))
+                    for item in recommendations[:3]
+                    if item.get("product_name")
+                ]
+                if names:
+                    return "My top matches are " + ", ".join(names) + "."
         required_agent = {
             "PRODUCT_DISCOVERY": AgentName.DISCOVERY.value,
             "FIT_QUERY": AgentName.FIT.value,
@@ -225,7 +241,9 @@ class NeuTailOrchestrator:
         response_synthesizer: Optional[ResponseSynthesizer] = None,
     ) -> None:
         self.llm_gateway = llm_gateway or LLMGateway()
-        self.agent_registry = agent_registry or AgentRegistry()
+        self.agent_registry = agent_registry or AgentRegistry(
+            llm_gateway=self.llm_gateway
+        )
         self.tool_registry = tool_registry or TOOL_REGISTRY
         self.session_service = session_service or SessionContextService()
         self.identity_validator = identity_validator or FastMCPIdentityValidator()
@@ -277,6 +295,7 @@ class NeuTailOrchestrator:
             completed_agents=result.get("completed_agents", []),
             extracted_entities=result.get("extracted_entities", {}),
             customer_context=result.get("customer_context"),
+            discovery_result=result.get("discovery_result"),
             agent_outputs=result.get("agent_outputs", {}),
             errors=result.get("errors", []),
             turn_count=session.turn_count,
@@ -430,7 +449,12 @@ class NeuTailOrchestrator:
                 if result.status is AgentRunStatus.SUCCESS:
                     completed.append(agent_name)
                 elif result.error:
-                    errors.append(f"AGENT_PARTIAL:{agent_name.value}:{result.error}")
+                    label = (
+                        "AGENT_PARTIAL"
+                        if result.status is AgentRunStatus.PARTIAL
+                        else "AGENT_FAILED"
+                    )
+                    errors.append(f"{label}:{agent_name.value}:{result.error}")
                 working.update(result.state_updates)
                 outputs[agent_name.value] = result.state_updates
                 run.end(outputs={"status": result.status.value})

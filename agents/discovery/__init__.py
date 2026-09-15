@@ -1,15 +1,17 @@
-"""Backward-compatible import surface for the Discovery Agent package."""
+"""Deterministic, tool-driven product discovery agent."""
 
-from agents.discovery import (
+from agents.discovery.agent import (
     DiscoveryAgent,
     DiscoveryAgentError,
+    DiscoveryToolDiscoveryError,
+    DiscoveryToolInvocationError,
+    FastMCPDiscoveryToolClient,
+)
+from agents.discovery.models import (
     DiscoveryCriteria,
     DiscoveryRequest,
     DiscoveryResult,
     DiscoverySignal,
-    DiscoveryToolDiscoveryError,
-    DiscoveryToolInvocationError,
-    FastMCPDiscoveryToolClient,
     ProductRecommendation,
     RankingScore,
     RetrievalStrategy,

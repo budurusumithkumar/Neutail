@@ -55,15 +55,21 @@ PROFILE_AGENT_TOOLS = frozenset(
         "get_engagement_summary",
     }
 )
-PRODUCT_TOOLS = frozenset(
-    {"product_search", "product_get", "product_get_many", "product_is_active"}
-)
+PRODUCT_TOOLS = frozenset({"product_get"})
 INVENTORY_TOOLS = frozenset(
     {
         "inventory_get",
         "inventory_get_by_location",
         "inventory_is_available",
         "inventory_get_available_skus",
+    }
+)
+DISCOVERY_AGENT_TOOLS = frozenset(
+    {
+        "search_products",
+        "get_product_details",
+        "check_inventory",
+        "semantic_product_search",
     }
 )
 FIT_TOOLS = frozenset(
@@ -90,17 +96,7 @@ UPSELL_TOOLS = frozenset(
 
 AGENT_TOOL_ALLOWLIST: dict[AgentName, frozenset[str]] = {
     AgentName.PROFILING: PROFILE_AGENT_TOOLS,
-    AgentName.DISCOVERY: (
-        frozenset(
-            {
-                "customer_exists",
-                "customer_get_preferences",
-                "customer_get_profile_facts",
-            }
-        )
-        | PRODUCT_TOOLS
-        | INVENTORY_TOOLS
-    ),
+    AgentName.DISCOVERY: DISCOVERY_AGENT_TOOLS,
     AgentName.FIT: (
         frozenset({"customer_exists", "customer_get_preferences", "product_get"})
         | ORDER_TOOLS
@@ -175,6 +171,7 @@ __all__ = [
     "AGENT_TOOL_ALLOWLIST",
     "ALL_PERMISSIONED_TOOLS",
     "AgentName",
+    "DISCOVERY_AGENT_TOOLS",
     "PROFILE_AGENT_TOOLS",
     "ToolPermissionError",
     "allowed_agents",

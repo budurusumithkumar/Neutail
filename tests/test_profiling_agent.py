@@ -37,7 +37,7 @@ def test_profile_tool_scope_is_exact_and_product_tools_are_denied():
     }
     assert visible == PROFILE_AGENT_TOOLS
     with pytest.raises(ToolPermissionError):
-        TOOL_REGISTRY.describe_tool("product_search", "profiling_agent")
+        TOOL_REGISTRY.describe_tool("search_products", "profiling_agent")
 
 
 def test_agent_builds_seed_validated_customer_context():

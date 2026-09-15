@@ -5,11 +5,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from models.dto import InventoryRecord, InventorySummary
-from models.entities import Inventory
+from repositories.inventory_repository import InventoryRepository
 
 
 class InventoryNotFoundError(LookupError):
@@ -34,13 +33,24 @@ class InventoryLocationNotFoundError(LookupError):
 class InventoryService:
     """Read stock availability without mutating inventory balances.
 
-    A SQLAlchemy session is injected by the API or tool-call boundary. All
-    aggregate checks use ``available_qty``, which is the database's authoritative
-    post-reservation balance.
+    A repository, or a SQLAlchemy session used to construct one, is injected by
+    the tool-call boundary. All aggregate checks use ``available_qty``, the
+    database's authoritative post-reservation balance.
     """
 
-    def __init__(self, session: Session) -> None:
-        self._session = session
+    def __init__(
+        self,
+        session: Session | None = None,
+        *,
+        repository: InventoryRepository | None = None,
+    ) -> None:
+        if repository is None and session is None:
+            raise ValueError("session or repository is required")
+        if repository is not None:
+            self._repository = repository
+        else:
+            assert session is not None
+            self._repository = InventoryRepository(session)
 
     def get_inventory(self, sku: str) -> InventorySummary:
         """Return a SKU's balances across all stores and the distribution centre.
@@ -54,16 +64,9 @@ class InventoryService:
         """
 
         normalized_sku = self._normalize_identifier(sku, "sku", required=True)
-        statement = (
-            select(Inventory)
-            .where(Inventory.sku == normalized_sku)
-            .order_by(Inventory.location_id)
-        )
-        entities = self._session.scalars(statement).all()
-        if not entities:
+        locations = self._repository.list_for_sku(normalized_sku)
+        if not locations:
             raise InventoryNotFoundError(normalized_sku)
-
-        locations = [InventoryRecord.model_validate(entity) for entity in entities]
         total_available_qty = sum(
             location.available_qty or 0 for location in locations
         )
@@ -88,15 +91,15 @@ class InventoryService:
         normalized_location_id = self._normalize_identifier(
             location_id, "location_id", required=True
         )
-        entity = self._session.get(
-            Inventory,
-            (normalized_sku, normalized_location_id),
+        record = self._repository.get_at_location(
+            normalized_sku,
+            normalized_location_id,
         )
-        if entity is None:
+        if record is None:
             raise InventoryLocationNotFoundError(
                 normalized_sku, normalized_location_id
             )
-        return InventoryRecord.model_validate(entity)
+        return record
 
     def is_available(self, sku: str, min_qty: int = 1) -> bool:
         """Return whether total availability across locations meets ``min_qty``."""
@@ -110,10 +113,7 @@ class InventoryService:
         if normalized_sku is None:
             return False
 
-        statement = select(func.coalesce(func.sum(Inventory.available_qty), 0)).where(
-            Inventory.sku == normalized_sku
-        )
-        total_available_qty = int(self._session.scalar(statement) or 0)
+        total_available_qty = self._repository.total_available(normalized_sku)
         return total_available_qty >= min_qty
 
     def get_available_skus(self, skus: Iterable[str]) -> dict[str, bool]:
@@ -136,21 +136,7 @@ class InventoryService:
                 seen.add(normalized_sku)
                 ordered_skus.append(normalized_sku)
 
-        availability = {sku: False for sku in ordered_skus}
-        if not ordered_skus:
-            return availability
-
-        statement = (
-            select(
-                Inventory.sku,
-                func.coalesce(func.sum(Inventory.available_qty), 0),
-            )
-            .where(Inventory.sku.in_(ordered_skus))
-            .group_by(Inventory.sku)
-        )
-        for sku, total_available_qty in self._session.execute(statement):
-            availability[sku] = int(total_available_qty or 0) >= 1
-        return availability
+        return self._repository.available_skus(ordered_skus)
 
     @staticmethod
     def _normalize_identifier(
