@@ -9,6 +9,7 @@ from typing import Annotated, AsyncIterator, Optional
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -19,6 +20,7 @@ from agents.profiling import (
     ProfileAgentRequest,
 )
 from api.auth import get_authenticated_customer_id, router as auth_router
+from api.sessions import router as sessions_router
 from models.dto import CustomerContext
 from orchestrator import (
     AgentDescriptor,
@@ -37,6 +39,37 @@ from services.session_context_service import (
 from tools.contracts import ToolDescriptor
 from tools.permissions import AgentName
 from tools.registry import TOOL_REGISTRY
+
+
+CORS_ORIGINS_ENV = "NEUTAIL_CORS_ORIGINS"
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+)
+
+
+def resolve_cors_origins() -> list[str]:
+    """Return unique configured UI origins without trailing slashes."""
+
+    configured = os.getenv(CORS_ORIGINS_ENV)
+    candidates = (
+        configured.split(",")
+        if configured is not None
+        else DEFAULT_CORS_ORIGINS
+    )
+    return list(
+        dict.fromkeys(
+            origin.strip().rstrip("/")
+            for origin in candidates
+            if origin.strip()
+        )
+    )
 
 
 class HealthResponse(BaseModel):
@@ -69,7 +102,17 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=resolve_cors_origins(),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Accept", "Authorization", "Content-Type", "X-Request-ID"],
+    expose_headers=["X-Request-ID", "X-Process-Time-Ms"],
+    max_age=600,
+)
 app.include_router(auth_router)
+app.include_router(sessions_router)
 
 
 @app.middleware("http")
@@ -260,4 +303,9 @@ async def list_agents(
     return orchestrator.agent_registry.list_agents()
 
 
-__all__ = ["app"]
+__all__ = [
+    "CORS_ORIGINS_ENV",
+    "DEFAULT_CORS_ORIGINS",
+    "app",
+    "resolve_cors_origins",
+]

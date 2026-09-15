@@ -163,6 +163,10 @@ flowchart TB
 | `POST /api/v1/auth/login` | Customer email and shared demo password | Bearer access token and `AuthUser` | Invalid credentials `401`; missing auth configuration `503`; invalid input `422` |
 | `GET /api/v1/auth/me` | Signed Bearer JWT | `AuthUser` | Missing, invalid, expired, or revoked token `401` |
 | `POST /api/v1/auth/logout` | Signed Bearer JWT | Empty response | Missing, invalid, expired, or revoked token `401` |
+| `POST /api/v1/sessions` | Signed Bearer JWT and optional channel | `SessionResponse` | Missing/invalid token `401`; invalid input `422` |
+| `GET /api/v1/sessions/{session_id}` | Signed Bearer JWT | `SessionResponse` | Missing/foreign session `404`; missing/invalid token `401` |
+| `DELETE /api/v1/sessions/{session_id}` | Signed Bearer JWT | Empty response | Missing/foreign session `404`; missing/invalid token `401` |
+| `GET /api/v1/sessions/{session_id}/context` | Signed Bearer JWT | Sanitized `SessionContext` | Missing/foreign session `404`; missing/invalid token `401` |
 | `POST /api/v1/chat` | `ChatRequest` JSON and signed Bearer JWT | `OrchestratorResponse` | Missing/invalid token `401`; unknown customer `404`; cross-customer session `409`; dependency failure `503`; invalid input `422` |
 | `GET /api/v1/agents` | None | Agent descriptors and implementation status | Registry initialization is fail-fast |
 | `POST /api/v1/profile` | `ProfileAgentRequest` JSON | `CustomerContext` | Unknown customer `404`; workflow failure `503`; invalid input `422` |
@@ -522,6 +526,8 @@ Configuration is environment-based:
 - `NEUTAIL_DEMO_PASSWORD` supplies the shared local-demo login password;
 - `NEUTAIL_ACCESS_TOKEN_TTL_SECONDS` optionally changes the one-hour token
   lifetime, up to one day;
+- `NEUTAIL_CORS_ORIGINS` optionally supplies the comma-separated browser UI
+  origins allowed to call the API;
 - `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, and `LANGSMITH_PROJECT` control
   tracing;
 - provider API keys are required only for LLM routes used in a demo;
@@ -546,6 +552,8 @@ Current controls:
 - Tool contracts declare read-only/idempotent/destructive hints.
 - LLM traces omit raw request and response bodies by default.
 - SQLite foreign-key enforcement is enabled on every connection.
+- CORS permits only explicit local-demo or environment-configured UI origins,
+  methods, and request headers; correlation and timing headers are exposed.
 
 Demo limitations:
 
@@ -565,7 +573,8 @@ The design is intentionally single-process. Before production use:
 
 1. Replace the demo HS256 secret with an external token issuer, asymmetric key
    verification, audience/issuer policy, rotation, and customer authorization.
-2. Add session history/management APIs if required by the UI.
+2. Move session lifecycle and revocation state into a shared store before
+   running multiple API workers.
 3. Implement Discovery, Fit, and Upsell agent workflows against their scoped
    FastMCP servers and route every model call through `LLMGateway`.
 4. Move SQLite to a managed relational database and add a repository layer if

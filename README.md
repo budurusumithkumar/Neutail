@@ -74,6 +74,32 @@ curl -X POST "http://127.0.0.1:8000/api/v1/chat" \
 `POST /api/v1/auth/logout` revokes the presented token until its expiry. Login
 and logout state are intentionally process-local demo behavior.
 
+Create a UI session before sending chat messages. The request body is optional;
+its `channel` can be `web`, `mobile`, or `demo` and defaults to `web`:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/sessions" \
+  -H "authorization: Bearer ${NEUTAIL_DEMO_TOKEN}" \
+  -H "content-type: application/json" \
+  -d '{"channel":"web"}'
+```
+
+Use the returned `session_id` for `/api/v1/chat`. Session metadata and sanitized
+context are available at `GET /api/v1/sessions/{session_id}` and
+`GET /api/v1/sessions/{session_id}/context`; close it with
+`DELETE /api/v1/sessions/{session_id}`.
+
+Browser requests are allowed from common local UI origins on ports 3000, 4173,
+5173, and 8080. For another frontend origin, configure it before starting the
+API:
+
+```bash
+export NEUTAIL_CORS_ORIGINS="http://localhost:4200"
+```
+
+Use exact comma-separated origins without path components. Deployed origins
+must be explicitly configured; the API does not use a wildcard origin.
+
 Inspect the current agent registry at `GET /api/v1/agents`. Reuse the same
 `session_id` and customer token to demonstrate multi-turn context preservation.
 

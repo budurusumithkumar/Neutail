@@ -458,6 +458,8 @@ class NeuTailOrchestrator:
         session = state["session"].model_copy(deep=True)
         session.turn_count += 1
         session.last_intent = intent.intent
+        if state.get("completed_agents"):
+            session.last_agent = state["completed_agents"][-1].value
         session.customer_context = state.get("customer_context")
         session.conversation.extend(
             [
@@ -496,4 +498,3 @@ __all__ = [
     "OrchestratorError",
     "ResponseSynthesizer",
 ]
-

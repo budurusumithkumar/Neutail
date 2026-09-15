@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from threading import RLock
-from typing import Optional
+from typing import Any, Optional
+from uuid import uuid4
 
 from orchestrator.models import SessionContext
 
@@ -63,6 +64,32 @@ class SessionContextService:
                 session_id=normalized_session,
                 customer_id=normalized_customer,
             )
+
+    def create_context(
+        self,
+        customer_id: str,
+        *,
+        attributes: Optional[dict[str, Any]] = None,
+    ) -> SessionContext:
+        """Create and persist a new empty session with a server-owned ID."""
+
+        normalized_customer = self._required(customer_id, "customer_id")
+        safe_attributes = dict(attributes or {})
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            while True:
+                session_id = f"S{uuid4().hex}"
+                if session_id not in self._contexts:
+                    break
+            context = SessionContext(
+                session_id=session_id,
+                customer_id=normalized_customer,
+                attributes=safe_attributes,
+                created_at=now,
+                updated_at=now,
+            )
+            self._contexts[session_id] = context.model_copy(deep=True)
+            return context.model_copy(deep=True)
 
     def save_context(self, context: SessionContext) -> SessionContext:
         if not isinstance(context, SessionContext):

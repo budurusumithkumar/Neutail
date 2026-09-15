@@ -62,6 +62,8 @@ class SessionContext(DTOModel):
     occasion: Optional[str] = None
     selected_sku: Optional[str] = None
     requested_size: Optional[str] = None
+    last_agent: Optional[str] = None
+    attributes: dict[str, Any] = Field(default_factory=dict)
     customer_context: Optional[CustomerContext] = None
     conversation: list[ConversationTurn] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_utc_now)
@@ -159,4 +161,3 @@ __all__ = [
     "OrchestratorResponse",
     "SessionContext",
 ]
-
