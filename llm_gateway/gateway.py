@@ -18,6 +18,7 @@ from langsmith import get_current_run_tree, trace, traceable
 from pydantic import BaseModel, ValidationError
 
 from llm_gateway.models import (
+    CompletionOptions,
     LLMCallRecord,
     LLMCallStatus,
     ModelRoute,
@@ -152,6 +153,11 @@ class LLMGateway:
                     prompt=prompt,
                     messages=messages,
                     model=model,
+                    model_options=(
+                        route.fallback_options
+                        if candidate_index > 0
+                        else route.primary_options
+                    ),
                     attempt=attempt_number,
                     is_fallback=candidate_index > 0,
                     response_model=response_model,
@@ -176,6 +182,7 @@ class LLMGateway:
         prompt: PromptDefinition,
         messages: list[dict[str, str]],
         model: str,
+        model_options: CompletionOptions,
         attempt: int,
         is_fallback: bool,
         response_model: Optional[type[StructuredModel]],
@@ -225,6 +232,7 @@ class LLMGateway:
                     "timeout": route.policy.timeout_seconds,
                     "drop_params": True,
                 }
+                kwargs.update(_completion_option_kwargs(model_options))
                 if response_model is not None:
                     kwargs["response_format"] = response_model
                 response = await asyncio.wait_for(
@@ -352,9 +360,33 @@ def _response_content(response: Any) -> str:
             for item in content
             if isinstance(_value(item, "text"), str)
         ]
-        if parts:
-            return "".join(parts).strip()
-    raise LLMGatewayError("LiteLLM returned empty message content")
+        combined = "".join(parts).strip()
+        if combined:
+            return combined
+    finish_reason = _value(choices[0], "finish_reason")
+    reasoning = _value(
+        message,
+        "reasoning_content",
+        _value(message, "reasoning"),
+    )
+    raise LLMGatewayError(
+        "LiteLLM returned empty message content "
+        f"(finish_reason={finish_reason!r}, "
+        f"reasoning_content_present={bool(reasoning)})"
+    )
+
+
+def _completion_option_kwargs(options: CompletionOptions) -> dict[str, Any]:
+    """Forward reasoning options that LiteLLM's NVIDIA mapper omits."""
+
+    extra_body: dict[str, Any] = {}
+    if options.reasoning_effort is not None:
+        extra_body["reasoning_effort"] = options.reasoning_effort
+    if options.clear_thinking is not None:
+        extra_body["chat_template_kwargs"] = {
+            "clear_thinking": options.clear_thinking
+        }
+    return {"extra_body": extra_body} if extra_body else {}
 
 
 def _response_usage(response: Any) -> TokenUsage:

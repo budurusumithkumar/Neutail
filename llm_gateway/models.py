@@ -14,6 +14,13 @@ class GatewayModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
+class CompletionOptions(GatewayModel):
+    """Governed model-specific options forwarded through LiteLLM."""
+
+    reasoning_effort: Optional[Literal["low", "medium", "high", "max"]] = None
+    clear_thinking: Optional[bool] = None
+
+
 class ModelRoute(GatewayModel):
     """Resolved logical route for one business use case."""
 
@@ -24,6 +31,8 @@ class ModelRoute(GatewayModel):
     prompt_group: str
     default_prompt_version: str = "v1"
     policy: GatewayPolicy
+    primary_options: CompletionOptions = Field(default_factory=CompletionOptions)
+    fallback_options: CompletionOptions = Field(default_factory=CompletionOptions)
 
     @model_validator(mode="after")
     def distinct_fallback(self) -> "ModelRoute":
@@ -148,6 +157,7 @@ def _render_value(value: Any) -> str:
 
 
 __all__ = [
+    "CompletionOptions",
     "GatewayModel",
     "IntentResult",
     "LLMCallRecord",

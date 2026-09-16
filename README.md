@@ -182,6 +182,12 @@ for ambiguity. Set `NEUTAIL_RESPONSE_SYNTHESIS_LLM=true` to verbalize structured
 results through the governed `response_synthesis` route; otherwise it uses
 deterministic response templates.
 
+Both NVIDIA models are reasoning models. Gateway routes use a 1,024-token
+output budget and low reasoning effort so reasoning tokens cannot routinely
+consume the entire response before visible content is produced. GLM-5.3 also
+receives `clear_thinking=true`; its separate `reasoning_content` is never used
+as customer-facing output.
+
 Discovery ranking never uses an LLM. Set
 `NEUTAIL_DISCOVERY_EXPLANATIONS_LLM=true` only to add governed explanations to
 the already-ranked products; an explanation failure leaves the recommendations
