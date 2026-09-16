@@ -7,6 +7,7 @@ import re
 from agents.discovery.constants import (
     CATEGORY_TERMS,
     COLOR_TERMS,
+    GENDER_TERMS,
     OCCASION_TERMS,
     SEMANTIC_TERMS,
     SIMILAR_ITEM_TERMS,
@@ -22,12 +23,12 @@ from agents.discovery.models import (
 
 _MAX_PRICE = re.compile(
     r"(?:under|below|less\s+than|up\s+to|max(?:imum)?)\s*"
-    r"(?:£|gbp\s*)?(\d+(?:\.\d{1,2})?)",
+    r"(?:[£$€]|(?:gbp|usd|eur)\s*)?(\d+(?:\.\d{1,2})?)",
     re.IGNORECASE,
 )
 _MIN_PRICE = re.compile(
     r"(?:over|above|more\s+than|at\s+least|min(?:imum)?)\s*"
-    r"(?:£|gbp\s*)?(\d+(?:\.\d{1,2})?)",
+    r"(?:[£$€]|(?:gbp|usd|eur)\s*)?(\d+(?:\.\d{1,2})?)",
     re.IGNORECASE,
 )
 _SIZE = re.compile(r"\bsize\s+([a-z0-9]+)\b", re.IGNORECASE)
@@ -52,6 +53,11 @@ class DiscoveryQueryBuilder:
         supplied = request.criteria or DiscoveryCriteria()
         session = request.session_context
 
+        gender = (
+            supplied.gender
+            or _first_mapping_match(query, GENDER_TERMS)
+            or request.customer_context.preferences.preferred_gender
+        )
         subcategory = supplied.subcategory or _first_mapping_match(
             query, SUBCATEGORY_TERMS
         )
@@ -95,6 +101,7 @@ class DiscoveryQueryBuilder:
             semantic_query = request.query
 
         return DiscoveryCriteria(
+            gender=gender,
             category=category,
             subcategory=subcategory,
             occasion=occasion,

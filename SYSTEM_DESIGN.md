@@ -556,12 +556,17 @@ responses are excluded from traces unless a route explicitly enables them.
 Telemetry records are process-local and are also emitted through application
 logging.
 
-The NVIDIA routes explicitly govern reasoning-model behavior. GLM-5.3 uses low
-reasoning effort, `clear_thinking=true`, and a 1,024-token output budget; the
-GPT-OSS fallback uses low reasoning effort with the same budget. The gateway
-accepts only final `message.content` as output and never promotes separate
-reasoning text into a customer-visible response. Empty final content is a
-failed attempt and triggers the configured fallback.
+`NEUTAIL_LLM_TRACE_BODIES=true` is a development-only global override that adds
+the fully rendered messages and final visible model content to each physical
+`litellm.acompletion` trace. It is disabled by default because those bodies can
+contain customer context and conversation data; separate reasoning content is
+not promoted into the trace output body.
+
+The NVIDIA routes explicitly govern model, timeout, token-limit, fallback, and
+optional reasoning behavior per use case. The gateway accepts only final
+`message.content` as output and never promotes separate reasoning text into a
+customer-visible response. Empty final content is a failed attempt and triggers
+the configured fallback.
 
 ## 9. Observability and failure handling
 

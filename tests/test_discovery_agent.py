@@ -19,10 +19,12 @@ def _product(
     price: float = 90,
     tier: str = "Premium",
     available_sizes: list[str] | None = None,
+    gender: str = "Women",
 ) -> Product:
     return Product(
         sku=sku,
         product_name=f"Product {sku}",
+        gender=gender,
         category="Dresses",
         subcategory="Midi Dress",
         brand="Neu Test",
@@ -48,6 +50,7 @@ def _request(
     query: str = "Show me black dresses under £100",
     *,
     view_counts: dict[str, int] | None = None,
+    preferred_gender: str | None = None,
 ) -> DiscoveryRequest:
     return DiscoveryRequest(
         query=query,
@@ -57,6 +60,7 @@ def _request(
             price_sensitivity=0.2,
             premium_affinity=0.91,
             preferences=CustomerPreferences(
+                preferred_gender=preferred_gender,
                 preferred_categories=["Dresses"],
                 preferred_colors=["Black"],
                 preferred_styles=["Classic"],
@@ -177,6 +181,22 @@ def test_explicit_price_ceiling_and_inventory_are_hard_filters():
     assert result.candidates_retrieved == 3
     assert result.candidates_after_filtering == 1
     assert "check_inventory" in tools.calls
+
+
+def test_customer_gender_is_enforced_as_a_hard_constraint():
+    mens_product = _product("MENS", gender="Men")
+    womens_product = _product("WOMENS", gender="Women")
+    tools = FakeDiscoveryTools([womens_product, mens_product])
+
+    result = asyncio.run(
+        DiscoveryAgent(tool_client=tools).execute(
+            _request(preferred_gender="Men")
+        )
+    )
+
+    assert result.status == "SUCCESS"
+    assert [item.sku for item in result.recommendations] == ["MENS"]
+    assert result.recommendations[0].gender == "Men"
 
 
 def test_semantic_retrieval_similarity_reaches_ranking_components():

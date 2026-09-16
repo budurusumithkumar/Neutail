@@ -32,6 +32,7 @@ from llm_gateway.telemetry import GatewayTelemetry
 
 StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 CompletionCallable = Callable[..., Awaitable[Any]]
+TRACE_BODIES_ENV = "NEUTAIL_LLM_TRACE_BODIES"
 
 
 class LLMGatewayError(RuntimeError):
@@ -84,11 +85,17 @@ class LLMGateway:
         prompt_registry: Optional[PromptRegistry] = None,
         telemetry: Optional[GatewayTelemetry] = None,
         completion: Optional[CompletionCallable] = None,
+        trace_bodies_enabled: Optional[bool] = None,
     ) -> None:
         self.router = router or ModelRouter.from_yaml()
         self.prompt_registry = prompt_registry or PromptRegistry()
         self.telemetry = telemetry or GatewayTelemetry()
         self._completion = completion or litellm.acompletion
+        self.trace_bodies_enabled = (
+            os.getenv(TRACE_BODIES_ENV, "false").casefold() == "true"
+            if trace_bodies_enabled is None
+            else trace_bodies_enabled
+        )
         self.completion_backend = (
             "litellm.acompletion"
             if completion is None
@@ -203,7 +210,13 @@ class LLMGateway:
             "message_count": len(messages),
             "prompt_characters": sum(len(item["content"]) for item in messages),
         }
-        if route.policy.log_request_body:
+        log_request_body = (
+            route.policy.log_request_body or self.trace_bodies_enabled
+        )
+        log_response_body = (
+            route.policy.log_response_body or self.trace_bodies_enabled
+        )
+        if log_request_body:
             trace_inputs["messages"] = messages
 
         with trace(
@@ -221,6 +234,7 @@ class LLMGateway:
                 "logical_model": route.logical_model,
                 "ls_provider": provider,
                 "ls_model_name": model,
+                "body_logging_enabled": self.trace_bodies_enabled,
             },
         ) as run:
             try:
@@ -297,7 +311,7 @@ class LLMGateway:
                 "usage_metadata": usage.model_dump(),
                 "status": status.value,
             }
-            if route.policy.log_response_body and content is not None:
+            if log_response_body and content is not None:
                 trace_outputs["content"] = content
             if error is None:
                 run.end(outputs=trace_outputs)
@@ -459,4 +473,5 @@ __all__ = [
     "LLMGatewayError",
     "LLMInvocationError",
     "StructuredOutputError",
+    "TRACE_BODIES_ENV",
 ]

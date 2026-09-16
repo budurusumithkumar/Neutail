@@ -159,6 +159,16 @@ class ResponseSynthesizer:
         discovery = state.get("discovery_result")
         if intent.intent == "PRODUCT_DISCOVERY" and discovery is not None:
             if discovery.get("status") == "NO_RESULTS":
+                preferred_gender = (
+                    context.preferences.preferred_gender if context else None
+                )
+                if preferred_gender and intent.category:
+                    return (
+                        "I couldn't find an in-stock product matching your "
+                        f"request for {intent.category.casefold()} in your "
+                        f"preferred {preferred_gender} catalogue. If you want "
+                        "to shop another gender category, say so explicitly."
+                    )
                 return (
                     "I couldn't find an in-stock product matching those "
                     "constraints. Try widening the colour, occasion, or price range."

@@ -19,6 +19,7 @@ class RetrievalStrategy(str, Enum):
 
 
 class DiscoveryCriteria(DTOModel):
+    gender: Optional[str] = None
     category: Optional[str] = None
     subcategory: Optional[str] = None
     occasion: Optional[str] = None
@@ -75,6 +76,7 @@ class ProductRecommendation(DTOModel):
     score: float = Field(ge=0, le=1)
     reason_codes: list[str] = Field(default_factory=list)
     explanation: Optional[str] = None
+    gender: Optional[str] = None
     category: Optional[str] = None
     subcategory: Optional[str] = None
     brand_tier: Optional[str] = None

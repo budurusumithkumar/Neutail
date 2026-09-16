@@ -32,6 +32,22 @@ CATEGORY_TERMS = {
     "trousers": "Trousers",
 }
 
+GENDER_TERMS = {
+    "female": "Women",
+    "ladies": "Women",
+    "lady": "Women",
+    "women's": "Women",
+    "womens": "Women",
+    "women": "Women",
+    "woman": "Women",
+    "male": "Men",
+    "men's": "Men",
+    "mens": "Men",
+    "men": "Men",
+    "man": "Men",
+    "unisex": "Unisex",
+}
+
 SUBCATEGORY_TERMS = {
     "maxi dress": "Maxi Dress",
     "midi dress": "Midi Dress",
@@ -68,6 +84,7 @@ STYLE_TERMS = (
 )
 
 OCCASION_TERMS = {
+    "birthday": "Party",
     "everyday": "Everyday",
     "formal": "Formal",
     "party": "Party",
@@ -110,6 +127,7 @@ __all__ = [
     "CATEGORY_TERMS",
     "COLOR_TERMS",
     "EDITORIAL_STYLES",
+    "GENDER_TERMS",
     "OCCASION_TERMS",
     "RANKING_WEIGHTS",
     "SEMANTIC_TERMS",

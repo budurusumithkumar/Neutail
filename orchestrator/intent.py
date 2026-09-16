@@ -19,6 +19,7 @@ _CATEGORY_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\b(?:bags?|handbags?|accessories)\b", "Accessories"),
 )
 _OCCASION_PATTERNS: tuple[tuple[str, str], ...] = (
+    (r"\bbirthday\b", "Party"),
     (r"\bwedding\b", "Wedding"),
     (r"\bformal\b", "Formal"),
     (r"\bparty\b", "Party"),
@@ -95,9 +96,14 @@ class IntentDetector:
         fit_request = any(
             token in normalized
             for token in (
-                " fit ",
                 "fits me",
                 "fit me",
+                "will this fit",
+                "will it fit",
+                "does this fit",
+                "does it fit",
+                "would this fit",
+                "would it fit",
                 "right size",
                 "size advice",
                 "sizing",

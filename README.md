@@ -149,6 +149,11 @@ runs, individual MCP tool calls, segmentation, latency, session ID, customer ID,
 and trace ID will then appear under the configured LangSmith project. Profiling
 and all Fit decisions remain deterministic and make no required LLM call.
 
+For local debugging, set `NEUTAIL_LLM_TRACE_BODIES=true` to include the rendered
+messages and final model content on each `litellm.acompletion` trace. Leave it
+disabled outside controlled development because prompts can contain customer
+context and conversation data. Restart the API after changing the flag.
+
 ## LLM Gateway
 
 All conversational model calls go through `LLMGateway.invoke()`. Agents provide
@@ -171,9 +176,9 @@ intent = await gateway.invoke(
 ```
 
 Routes and policies are in `llm_gateway/config/models.yaml`; prompts are in
-`llm_gateway/prompts/`. Development routes use NVIDIA NIM through LiteLLM:
-Z.ai GLM-5.3 is the primary model for every use case, with NVIDIA-hosted
-OpenAI GPT-OSS-20B as the fallback. Set `NVIDIA_NIM_API_KEY` and leave
+`llm_gateway/prompts/`. Development routes use NVIDIA NIM through LiteLLM;
+primary and fallback models are configured independently per use case. Set
+`NVIDIA_NIM_API_KEY` and leave
 `NVIDIA_NIM_API_BASE=https://integrate.api.nvidia.com/v1`. The Profiling Agent
 does not use this gateway because
 its segment classification is intentionally deterministic. The orchestrator
@@ -182,11 +187,8 @@ for ambiguity. Set `NEUTAIL_RESPONSE_SYNTHESIS_LLM=true` to verbalize structured
 results through the governed `response_synthesis` route; otherwise it uses
 deterministic response templates.
 
-Both NVIDIA models are reasoning models. Gateway routes use a 1,024-token
-output budget and low reasoning effort so reasoning tokens cannot routinely
-consume the entire response before visible content is produced. GLM-5.3 also
-receives `clear_thinking=true`; its separate `reasoning_content` is never used
-as customer-facing output.
+Token limits, timeouts, and optional reasoning controls are governed per route.
+Separate `reasoning_content` is never used as customer-facing output.
 
 Discovery ranking never uses an LLM. Set
 `NEUTAIL_DISCOVERY_EXPLANATIONS_LLM=true` only to add governed explanations to

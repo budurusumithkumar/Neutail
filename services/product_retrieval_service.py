@@ -34,6 +34,7 @@ def build_product_document(product: Product) -> str:
 
     fields = (
         ("Product", product.product_name),
+        ("Gender", product.gender),
         ("Category", product.category),
         ("Subcategory", product.subcategory),
         ("Brand", product.brand),
@@ -211,6 +212,7 @@ class ProductRetrievalService:
                         sku=product.sku,
                         vector=vector,
                         metadata={
+                            "gender": product.gender or "",
                             "category": product.category or "",
                             "occasion": product.occasion or "",
                         },
@@ -232,6 +234,7 @@ class ProductRetrievalService:
         filters = {
             key: value
             for key, value in {
+                "gender": request.gender,
                 "category": request.category,
                 "occasion": request.occasion,
             }.items()

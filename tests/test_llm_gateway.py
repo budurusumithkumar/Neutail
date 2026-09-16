@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 os.environ["LANGSMITH_TRACING"] = "false"
@@ -70,12 +71,10 @@ def test_every_configured_route_resolves_a_versioned_prompt():
         route = router.resolve(use_case)
         prompt = prompts.load(route.prompt_group, route.default_prompt_version)
         assert prompt.version == route.default_prompt_version
-        assert route.primary_model == "nvidia_nim/z-ai/glm-5.3"
-        assert route.fallback_model == "nvidia_nim/openai/gpt-oss-20b"
-        assert route.primary_options.reasoning_effort == "low"
-        assert route.primary_options.clear_thinking is True
-        assert route.fallback_options.reasoning_effort == "low"
-        assert route.policy.max_tokens == 1024
+        assert route.primary_model
+        assert route.fallback_model
+        assert route.primary_model != route.fallback_model
+        assert route.policy.max_tokens > 0
 
 
 def test_discovery_prompt_forbids_fact_invention_and_reranking():
@@ -132,14 +131,11 @@ def test_gateway_returns_validated_structured_output_and_accounts_tokens():
         return result, telemetry.records
 
     result, records = asyncio.run(scenario())
+    route = ModelRouter.from_yaml().resolve("intent_detection")
     assert isinstance(result, IntentResult)
     assert result.intent == "PRODUCT_DISCOVERY"
-    assert received[0]["model"] == "nvidia_nim/z-ai/glm-5.3"
-    assert received[0]["max_tokens"] == 1024
-    assert received[0]["extra_body"] == {
-        "reasoning_effort": "low",
-        "chat_template_kwargs": {"clear_thinking": True},
-    }
+    assert received[0]["model"] == route.primary_model
+    assert received[0]["max_tokens"] == route.policy.max_tokens
     assert received[0]["response_format"] is IntentResult
     assert records[0].status is LLMCallStatus.SUCCESS
     assert records[0].total_tokens == 15
@@ -178,8 +174,10 @@ def test_invalid_structured_output_is_retried_centrally():
 
 
 def test_primary_provider_failure_uses_configured_fallback():
+    route = ModelRouter.from_yaml().resolve("upsell_message")
+
     async def fake_completion(**kwargs):
-        if kwargs["model"] == "nvidia_nim/z-ai/glm-5.3":
+        if kwargs["model"] == route.primary_model:
             raise RuntimeError("provider unavailable")
         return _response("A concise eligible offer.", model=kwargs["model"])
 
@@ -205,15 +203,16 @@ def test_primary_provider_failure_uses_configured_fallback():
         LLMCallStatus.FALLBACK_SUCCESS,
     ]
     assert records[-1].provider == "nvidia_nim"
-    assert records[-1].provider_model == "nvidia_nim/openai/gpt-oss-20b"
+    assert records[-1].provider_model == route.fallback_model
 
 
-def test_reasoning_only_primary_response_uses_configured_fallback():
+def test_empty_primary_response_uses_configured_fallback():
     received: list[dict] = []
+    route = ModelRouter.from_yaml().resolve("optional_summary")
 
     async def fake_completion(**kwargs):
         received.append(kwargs)
-        if kwargs["model"] == "nvidia_nim/z-ai/glm-5.3":
+        if kwargs["model"] == route.primary_model:
             return _response(
                 None,
                 model=kwargs["model"],
@@ -235,11 +234,8 @@ def test_reasoning_only_primary_response_uses_configured_fallback():
     result, records = asyncio.run(scenario())
 
     assert result == "Fallback answer."
-    assert received[0]["extra_body"] == {
-        "reasoning_effort": "low",
-        "chat_template_kwargs": {"clear_thinking": True},
-    }
-    assert received[1]["extra_body"] == {"reasoning_effort": "low"}
+    assert received[0]["model"] == route.primary_model
+    assert received[1]["model"] == route.fallback_model
     assert [record.status for record in records] == [
         LLMCallStatus.FAILED,
         LLMCallStatus.FALLBACK_SUCCESS,
@@ -286,3 +282,50 @@ def test_telemetry_log_does_not_contain_raw_context(caplog):
         asyncio.run(scenario())
     assert secret_message not in caplog.text
     assert "trace-private" in caplog.text
+
+
+def test_trace_body_override_records_rendered_messages_and_final_content(
+    monkeypatch,
+):
+    captured: dict = {}
+    private_message = "private-customer-message"
+
+    class FakeRun:
+        def end(self, *, outputs, error=None):
+            captured["outputs"] = outputs
+            captured["error"] = error
+
+    @contextmanager
+    def fake_trace(*, inputs, **_kwargs):
+        captured["inputs"] = inputs
+        yield FakeRun()
+
+    async def fake_completion(**kwargs):
+        return _response("Visible model response", model=kwargs["model"])
+
+    async def scenario():
+        monkeypatch.setenv("NEUTAIL_LLM_TRACE_BODIES", "true")
+        monkeypatch.setattr("llm_gateway.gateway.trace", fake_trace)
+        gateway = LLMGateway(completion=fake_completion)
+        result = await gateway.invoke(
+            "optional_summary",
+            {
+                "conversation": [
+                    {"role": "user", "content": private_message}
+                ]
+            },
+            "Orchestrator",
+            "trace-with-bodies",
+        )
+        return result, gateway.trace_bodies_enabled
+
+    result, enabled = asyncio.run(scenario())
+
+    assert enabled is True
+    assert result == "Visible model response"
+    assert any(
+        private_message in message["content"]
+        for message in captured["inputs"]["messages"]
+    )
+    assert captured["outputs"]["content"] == "Visible model response"
+    assert captured["error"] is None

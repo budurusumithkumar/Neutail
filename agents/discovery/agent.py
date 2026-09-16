@@ -332,6 +332,7 @@ class DiscoveryAgent:
                 "search_products",
                 {
                     "criteria": ProductSearchInput(
+                        gender=criteria.gender,
                         category=criteria.category,
                         subcategory=criteria.subcategory,
                         occasion=criteria.occasion,
@@ -352,6 +353,7 @@ class DiscoveryAgent:
             return products, {}, len(products)
 
         semantic_query = criteria.semantic_query or request.query
+        semantic_gender = criteria.gender
         semantic_category = criteria.category
         semantic_occasion = criteria.occasion
         selected_sku = request.session_context.selected_sku
@@ -382,6 +384,7 @@ class DiscoveryAgent:
             name="semantic_product_search",
             run_type="retriever",
             inputs={
+                "gender": semantic_gender,
                 "category": semantic_category,
                 "occasion": semantic_occasion,
                 "limit": DEFAULT_RETRIEVAL_LIMIT,
@@ -392,6 +395,7 @@ class DiscoveryAgent:
                 {
                     "request": SemanticProductSearchInput(
                         query=semantic_query,
+                        gender=semantic_gender,
                         category=semantic_category,
                         occasion=semantic_occasion,
                         limit=DEFAULT_RETRIEVAL_LIMIT,
@@ -462,6 +466,8 @@ class DiscoveryAgent:
         for product in candidates:
             price = product.current_price_gbp
             if product.active is False:
+                continue
+            if not matches(product.gender, criteria.gender):
                 continue
             if not matches(product.category, criteria.category):
                 continue
@@ -601,6 +607,7 @@ class DiscoveryAgent:
             brand=product.brand or "",
             score=item.ranking.total_score,
             reason_codes=item.ranking.reason_codes,
+            gender=product.gender,
             category=product.category,
             subcategory=product.subcategory,
             brand_tier=product.brand_tier,

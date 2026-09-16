@@ -8,10 +8,17 @@ from services.product_retrieval_service import (
 )
 
 
-def _product(sku: str, *, style: str, occasion: str) -> Product:
+def _product(
+    sku: str,
+    *,
+    style: str,
+    occasion: str,
+    gender: str = "Women",
+) -> Product:
     return Product(
         sku=sku,
         product_name=f"Product {sku}",
+        gender=gender,
         category="Dresses",
         subcategory="Midi Dress",
         brand="Neu Test",
@@ -75,3 +82,35 @@ def test_catalogue_can_be_indexed_and_searched_through_replaceable_store():
     assert matches
     assert matches[0].sku == "ELEGANT"
     assert 0 < matches[0].similarity_score <= 1
+
+
+def test_semantic_search_applies_gender_metadata_filter():
+    products = [
+        _product(
+            "WOMENS",
+            style="Classic",
+            occasion="Wedding",
+            gender="Women",
+        ),
+        _product(
+            "MENS",
+            style="Classic",
+            occasion="Wedding",
+            gender="Men",
+        ),
+    ]
+    service = ProductRetrievalService(
+        repository=CatalogueRepository(products),  # type: ignore[arg-type]
+        vector_store=InMemoryVectorStore(),
+    )
+    service.refresh_index()
+
+    matches = service.semantic_search(
+        SemanticProductSearchInput(
+            query="elegant wedding outfit",
+            gender="Men",
+            occasion="Wedding",
+        )
+    )
+
+    assert [match.sku for match in matches] == ["MENS"]

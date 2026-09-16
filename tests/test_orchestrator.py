@@ -136,6 +136,65 @@ def test_compound_request_builds_ordered_deterministic_plan():
     assert result.discovery_result["status"] in {"SUCCESS", "NO_RESULTS"}
 
 
+def test_birthday_budget_request_does_not_run_fit_without_selected_product():
+    message = (
+        "I need a dress below $100 for my birthday and it should fit perfectly"
+    )
+
+    async def scenario():
+        return await NeuTailOrchestrator().handle(
+            _request(message, session_id="birthday-budget-session")
+        )
+
+    result = asyncio.run(scenario())
+
+    assert result.intent == "PRODUCT_DISCOVERY"
+    assert result.execution_plan == [
+        AgentName.PROFILING,
+        AgentName.DISCOVERY,
+    ]
+    assert result.completed_agents == result.execution_plan
+    assert result.extracted_entities["category"] == "Dresses"
+    assert result.extracted_entities["occasion"] == "Party"
+    assert result.fit_result is None
+    assert result.errors == []
+    assert result.discovery_result is not None
+    assert result.discovery_result["status"] == "SUCCESS"
+    assert all(
+        item["price_gbp"] <= 100
+        for item in result.discovery_result["recommendations"]
+    )
+
+
+def test_customer_gender_prevents_cross_catalogue_wedding_recommendations():
+    message = (
+        "suggest me a dress above $80 for my wedding and should fit perfect"
+    )
+
+    async def scenario():
+        return await NeuTailOrchestrator().handle(
+            _request(
+                message,
+                customer_id="CUST007",
+                session_id="mens-wedding-dress-session",
+            )
+        )
+
+    result = asyncio.run(scenario())
+
+    assert result.customer_context is not None
+    assert result.customer_context.preferences.preferred_gender == "Men"
+    assert result.execution_plan == [
+        AgentName.PROFILING,
+        AgentName.DISCOVERY,
+    ]
+    assert result.discovery_result is not None
+    assert result.discovery_result["status"] == "NO_RESULTS"
+    assert result.discovery_result["recommendations"] == []
+    assert "preferred Men catalogue" in result.response
+    assert result.errors == []
+
+
 def test_ambiguous_intent_uses_llm_gateway_and_merges_entities():
     calls: list[dict] = []
 

@@ -1,19 +1,14 @@
 routes:
   intent_detection:
     logical_model: fast
-    primary_model: nvidia_nim/z-ai/glm-5.3
-    fallback_model: nvidia_nim/openai/gpt-oss-20b
+    primary_model: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+    fallback_model: nvidia_nim/nvidia/llama-3.1-nemotron-nano-8b-v1
     prompt_group: intent
     default_prompt_version: v1
-    primary_options:
-      reasoning_effort: low
-      clear_thinking: true
-    fallback_options:
-      reasoning_effort: low
     policy:
       temperature: 0.0
-      max_tokens: 1024
-      timeout_seconds: 30
+      max_tokens: 180
+      timeout_seconds: 120
       allow_fallback: true
       structured_output_retries: 1
       log_request_body: false
@@ -21,19 +16,14 @@ routes:
 
   product_explanation:
     logical_model: general
-    primary_model: nvidia_nim/z-ai/glm-5.3
-    fallback_model: nvidia_nim/openai/gpt-oss-20b
+    primary_model: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+    fallback_model: nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5
     prompt_group: discovery
     default_prompt_version: v1
-    primary_options:
-      reasoning_effort: low
-      clear_thinking: true
-    fallback_options:
-      reasoning_effort: low
     policy:
       temperature: 0.3
-      max_tokens: 1024
-      timeout_seconds: 30
+      max_tokens: 300
+      timeout_seconds: 120
       allow_fallback: true
       structured_output_retries: 1
       log_request_body: false
@@ -41,19 +31,14 @@ routes:
 
   discovery_explanation:
     logical_model: general
-    primary_model: nvidia_nim/z-ai/glm-5.3
-    fallback_model: nvidia_nim/openai/gpt-oss-20b
+    primary_model: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+    fallback_model: nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5
     prompt_group: discovery
     default_prompt_version: v1
-    primary_options:
-      reasoning_effort: low
-      clear_thinking: true
-    fallback_options:
-      reasoning_effort: low
     policy:
       temperature: 0.3
-      max_tokens: 1024
-      timeout_seconds: 30
+      max_tokens: 1500
+      timeout_seconds: 120
       allow_fallback: true
       structured_output_retries: 1
       log_request_body: false
@@ -61,19 +46,14 @@ routes:
 
   fit_explanation:
     logical_model: general
-    primary_model: nvidia_nim/z-ai/glm-5.3
-    fallback_model: nvidia_nim/openai/gpt-oss-20b
+    primary_model: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+    fallback_model: nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5
     prompt_group: fit
     default_prompt_version: v1
-    primary_options:
-      reasoning_effort: low
-      clear_thinking: true
-    fallback_options:
-      reasoning_effort: low
     policy:
       temperature: 0.2
-      max_tokens: 1024
-      timeout_seconds: 30
+      max_tokens: 250
+      timeout_seconds: 120
       allow_fallback: true
       structured_output_retries: 1
       log_request_body: false
@@ -81,19 +61,14 @@ routes:
 
   upsell_message:
     logical_model: fast
-    primary_model: nvidia_nim/z-ai/glm-5.3
-    fallback_model: nvidia_nim/openai/gpt-oss-20b
+    primary_model: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+    fallback_model: nvidia_nim/nvidia/llama-3.1-nemotron-nano-8b-v1
     prompt_group: upsell
     default_prompt_version: v1
-    primary_options:
-      reasoning_effort: low
-      clear_thinking: true
-    fallback_options:
-      reasoning_effort: low
     policy:
       temperature: 0.35
-      max_tokens: 1024
-      timeout_seconds: 30
+      max_tokens: 180
+      timeout_seconds: 120
       allow_fallback: true
       structured_output_retries: 1
       log_request_body: false
@@ -101,19 +76,14 @@ routes:
 
   optional_summary:
     logical_model: fast
-    primary_model: nvidia_nim/z-ai/glm-5.3
-    fallback_model: nvidia_nim/openai/gpt-oss-20b
+    primary_model: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+    fallback_model: nvidia_nim/nvidia/llama-3.1-nemotron-nano-8b-v1
     prompt_group: summary
     default_prompt_version: v1
-    primary_options:
-      reasoning_effort: low
-      clear_thinking: true
-    fallback_options:
-      reasoning_effort: low
     policy:
       temperature: 0.2
-      max_tokens: 1024
-      timeout_seconds: 30
+      max_tokens: 220
+      timeout_seconds: 120
       allow_fallback: true
       structured_output_retries: 1
       log_request_body: false
@@ -121,19 +91,14 @@ routes:
 
   response_synthesis:
     logical_model: fast
-    primary_model: nvidia_nim/z-ai/glm-5.3
-    fallback_model: nvidia_nim/openai/gpt-oss-20b
+    primary_model: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+    fallback_model: nvidia_nim/nvidia/llama-3.1-nemotron-nano-8b-v1
     prompt_group: response
     default_prompt_version: v1
-    primary_options:
-      reasoning_effort: low
-      clear_thinking: true
-    fallback_options:
-      reasoning_effort: low
     policy:
       temperature: 0.2
-      max_tokens: 1024
-      timeout_seconds: 30
+      max_tokens: 240
+      timeout_seconds: 120
       allow_fallback: true
       structured_output_retries: 0
       log_request_body: false

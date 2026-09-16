@@ -576,6 +576,7 @@ ProductSearchRequest = ProductSearchCriteria
 class ProductSearchInput(DTOModel):
     """Structured catalogue constraints exposed to the Discovery Agent."""
 
+    gender: Optional[str] = None
     category: Optional[str] = None
     subcategory: Optional[str] = None
     occasion: Optional[str] = None
@@ -606,6 +607,7 @@ class SemanticProductSearchInput(DTOModel):
     """Semantic catalogue query with optional stable metadata filters."""
 
     query: str = Field(min_length=1, max_length=2_000)
+    gender: Optional[str] = None
     category: Optional[str] = None
     occasion: Optional[str] = None
     limit: int = Field(default=20, ge=1, le=100)

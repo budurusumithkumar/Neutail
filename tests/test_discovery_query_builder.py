@@ -14,6 +14,7 @@ def _request(
     *,
     criteria: DiscoveryCriteria | None = None,
     selected_sku: str | None = None,
+    preferred_gender: str | None = None,
 ) -> DiscoveryRequest:
     return DiscoveryRequest(
         query=query,
@@ -21,7 +22,7 @@ def _request(
         customer_context=CustomerContext(
             customer_id="CUST001",
             segment="Prestige Champion",
-            preferences=CustomerPreferences(),
+            preferences=CustomerPreferences(preferred_gender=preferred_gender),
         ),
         session_context=SessionContext(
             session_id="discovery-query-session",
@@ -66,6 +67,40 @@ def test_semantic_query_with_exact_constraints_selects_hybrid_retrieval():
     assert strategy is RetrievalStrategy.HYBRID
     assert criteria.colors == ["Navy"]
     assert criteria.max_price == 200
+
+
+def test_dollar_budget_and_birthday_are_normalized_to_catalogue_constraints():
+    criteria, strategy = _strategy(
+        _request(
+            "I need a dress below $100 for my birthday and it should fit perfectly"
+        )
+    )
+
+    assert strategy is RetrievalStrategy.STRUCTURED
+    assert criteria.category == "Dresses"
+    assert criteria.occasion == "Party"
+    assert criteria.max_price == 100
+
+
+def test_customer_gender_is_a_default_constraint_and_explicit_gender_overrides_it():
+    message = "suggest me a dress above $80 for my wedding and should fit perfect"
+    criteria, strategy = _strategy(
+        _request(message, preferred_gender="Men")
+    )
+
+    assert strategy is RetrievalStrategy.STRUCTURED
+    assert criteria.gender == "Men"
+    assert criteria.category == "Dresses"
+    assert criteria.occasion == "Wedding"
+    assert criteria.min_price == 80
+
+    explicit, _ = _strategy(
+        _request(
+            "suggest me a women's dress above $80 for my wedding",
+            preferred_gender="Men",
+        )
+    )
+    assert explicit.gender == "Women"
 
 
 def test_selected_product_and_similarity_language_select_similar_item():
