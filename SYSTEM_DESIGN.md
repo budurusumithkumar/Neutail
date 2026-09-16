@@ -4,8 +4,8 @@
 
 Neu.Tail is a demo retail-assistant backend organized around agent-scoped tools,
 deterministic domain services, and a controlled LLM gateway. The currently
-executable application is a vertical slice for customer profiling and product
-discovery:
+executable application is a vertical slice for customer profiling, product
+discovery, and size-and-fit guidance:
 
 - FastAPI exposes health, profile construction, and profile-tool discovery.
 - A LangGraph orchestrator validates identity, manages multi-turn state,
@@ -14,20 +14,23 @@ discovery:
 - A LangGraph `ProfileAgent` builds a normalized `CustomerContext`.
 - `DiscoveryAgent` consumes that context, selects structured, semantic,
   similar-item, or hybrid retrieval, and ranks candidates deterministically.
+- `FitAgent` combines exact, brand, category, return, exchange, inventory, and
+  vector-retrieved evidence, then calculates size guidance and risk in code.
 - Each implemented agent discovers and calls only its exact permitted FastMCP
   tool set.
 - Tool adapters call deterministic domain services backed by SQLAlchemy and a
   seeded SQLite database.
 - LangSmith instruments API-triggered agent runs and individual tool calls.
-- A replaceable embedding provider and vector store live behind
-  `ProductRetrievalService`; inventory remains outside the index.
+- Replaceable embedding providers and vector stores live behind product and Fit
+  retrieval services; inventory remains outside both indexes.
 - A LiteLLM-based gateway handles ambiguous orchestrator intent and optional
-  response/discovery prose; neither segmentation nor product ranking uses an
-  LLM.
+  response, Discovery, and Fit prose; segmentation, product ranking, sizing,
+  and fit-risk decisions never use an LLM.
 
-Fit and Upsell remain future specialised-agent slices. Discovery publishes
-ranked product data and engagement signals for those agents through the
-orchestrator, but never calculates fit or makes service-eligibility decisions.
+Upsell remains a future specialised-agent slice. Discovery publishes ranked
+product data and engagement signals through the orchestrator but never
+calculates fit or makes service-eligibility decisions. Fit owns sizing and fit
+risk without invoking Discovery or Upsell.
 The authentication boundary issues and validates signed demo JWTs, while token
 revocation and session context remain process-local.
 
@@ -49,27 +52,31 @@ flowchart LR
     API --> O[LangGraph orchestrator]
     O --> PA[LangGraph ProfileAgent]
     O --> DA[DiscoveryAgent]
+    O --> FA[FitAgent]
     O -->|identity and capability discovery| MCP
     PA -->|MCP discovery and calls| MCP[Agent-scoped FastMCP server]
     DA -->|MCP discovery and calls| MCP
+    FA -->|MCP discovery and calls| MCP
     MCP --> DS[Domain services]
     DS --> ORM[SQLAlchemy ORM]
     ORM --> DB[(Seeded SQLite database)]
 
     O -->|ambiguous intent / optional synthesis| GW[LLM Gateway]
     DA -->|optional ranked-product explanation| GW
-    O -.-> Future[Future Fit / Upsell agents]
+    FA -->|optional fixed-decision explanation| GW
+    O -.-> Future[Future Upsell agent]
     GW --> Lite[LiteLLM]
-    Lite -.-> Providers[OpenAI / Gemini / Ollama]
+    Lite -.-> Providers[NVIDIA NIM models]
 
     API -. request metadata .-> LS[LangSmith]
     PA -. graph and tool traces .-> LS
     DA -. retrieval and ranking traces .-> LS
+    FA -. evidence, retrieval, and decision traces .-> LS
     GW -. sanitized LLM traces .-> LS
 ```
 
 Solid lines are active runtime paths. Dashed lines represent optional
-observability or specialised-agent extensions not yet implemented.
+observability or the specialised-agent extension not yet implemented.
 
 ## 4. Logical architecture
 
@@ -84,6 +91,7 @@ flowchart TB
     subgraph Agent[Agent layer]
         Graph[ProfileAgent LangGraph]
         Discovery[DiscoveryAgent]
+        FitAgent[FitAgent]
         Cache[Process-local profile cache]
         Rules[Deterministic segment classifier]
         Mapper[Profile fact and context mapper]
@@ -138,6 +146,7 @@ flowchart TB
     Graph --> Registry
     Graph --> Mapper
     Discovery --> Registry
+    FitAgent --> Registry
     Mapper --> Rules
     Registry --> Policy
     Registry --> Contracts
@@ -161,9 +170,11 @@ flowchart TB
 | `api/main.py` | Owns the HTTP boundary, application lifespan, request correlation, response timing, and exception-to-status mapping. |
 | `orchestrator/` | Owns identity validation, sessions, intent detection, capability discovery, agent routing, state merging, and response synthesis. |
 | `agents/profiling/` | Owns profile orchestration, normalization, deterministic segmentation, data-quality reporting, and session-scoped caching. |
+| `agents/discovery/` | Owns product criteria, retrieval strategy, hard constraints, deterministic ranking, and downstream engagement signals. |
+| `agents/fit/` | Owns MCP-scoped evidence orchestration, deterministic sizing/risk policy, optional explanation, and downstream fit signals. |
 | `tools/` | Owns tool definitions, generated schemas, discovery metadata, permission enforcement, and service adapters. |
 | `services/` | Owns deterministic data retrieval, aggregation, validation, fit logic, and upsell policy logic. |
-| `models/dto.py` | Defines validated models crossing service, tool, agent, gateway, and API boundaries. |
+| `models/dto.py` and `models/fit.py` | Define validated models crossing service, tool, agent, gateway, and API boundaries. |
 | `models/entities.py` | Maps the seeded database tables and relationships to SQLAlchemy ORM entities. |
 | `database/session.py` | Resolves the database URL and creates engines/session factories with SQLite foreign keys enabled. |
 | `llm_gateway/` | Owns prompt versions, use-case-to-model routes, LiteLLM invocation, output validation, fallback, and model-call telemetry. |
@@ -214,8 +225,8 @@ Clear profile, discovery, fit, and service requests are detected by transparent
 rules. Ambiguous text is sent to `LLMGateway.invoke()` with current session
 entities and a Pydantic `IntentResult`. The deterministic planner prepends
 Profiling only when `CustomerContext` is absent, then orders Discovery, Fit, and
-Upsell for primary and secondary intents. Discovery is implemented; Fit and
-Upsell return a centralized `AGENT_UNAVAILABLE` result. The orchestrator never
+Upsell for primary and secondary intents. Discovery and Fit are implemented;
+Upsell returns a centralized `AGENT_UNAVAILABLE` result. The orchestrator never
 substitutes its own product-ranking, fit, or upsell logic.
 
 Sessions are bound to the first customer identity that uses them. They retain
@@ -336,6 +347,36 @@ descriptors, not inventory or reservation data. Ranking exposes weighted score
 components and machine-readable reason codes. The result can flow to Fit, while
 `HIGH_PRODUCT_ENGAGEMENT` can flow to Upsell; Discovery invokes neither agent.
 
+### Size & Fit execution sequence
+
+```mermaid
+flowchart LR
+    O[Orchestrator] -->|CustomerContext + session + SKU + size| F[FitAgent]
+    F --> T[Discover exact four-tool Fit scope]
+    T --> P[get_product_details]
+    T --> FP[fit_get_profile]
+    T --> E[fit_build_evidence]
+    T --> V[fit_retrieve_similar_cases]
+    E --> H[Exact SKU > brand > category evidence]
+    V --> H
+    P --> H
+    FP --> H
+    H --> C[Deterministic FitCalculator]
+    C --> R[Size + confidence + fit risk + action]
+    R --> S[FitPolicy downstream signals]
+    R --> X[Optional LLM-only explanation]
+    S --> OUT[FitResult]
+    X --> OUT
+```
+
+The agent receives `CustomerContext`, `SessionContext`, SKU, optional requested
+size, and `PREVENT` mode. It accesses facts only through its scoped in-process
+FastMCP server. Exact customer/product history outranks brand and category
+evidence; vector-retrieved anonymized outcomes supplement rather than replace
+authoritative evidence. Non-fit returns do not influence sizing. Unavailable
+sizes, missing history, provider failures, and chronic fit-return behavior all
+produce explicit actions, reason codes, or downstream signals.
+
 ## 6. FastMCP tool design
 
 ### Registration and contracts
@@ -357,22 +398,22 @@ The registry supports:
 
 Agents receive a server containing only their allowlisted tools. A disallowed
 tool is absent during discovery and also rejected by direct registry lookup.
-The implemented ProfileAgent and DiscoveryAgent additionally verify that
-runtime discovery returns their required tool scopes before continuing.
+The implemented ProfileAgent, DiscoveryAgent, and FitAgent additionally verify
+that runtime discovery returns their required tool scopes before continuing.
 
 | Agent scope | Capability groups in the current registry |
 | --- | --- |
 | Profiling | Aggregate profile, purchase, return, loyalty, and engagement summaries |
 | Discovery | `search_products`, `get_product_details`, `check_inventory`, and `semantic_product_search` |
-| Fit | Customer preferences, product facts, order/return evidence, inventory, and fit calculations |
+| Fit | Exactly `get_product_details`, `fit_get_profile`, `fit_build_evidence`, and `fit_retrieve_similar_cases` |
 | Upsell | Customer and loyalty facts, return summary, product facts, engagement, eligibility, suppression, and decision recording |
 
-Profiling and Discovery have implemented agent workflows today.
+Profiling, Discovery, and Fit have implemented agent workflows today.
 
 ### Tool runtime
 
 `ToolRuntime` is lazily created once per process. It owns the SQLAlchemy engine,
-session factory, process-local vector index, and process-local
+session factory, process-local product and fit vector indexes, and process-local
 `UpsellPolicyState`. Every adapter opens a
 short-lived session; read calls close without committing, while explicitly
 marked write calls commit and roll back on failure. The Profiling Agent uses an
@@ -395,7 +436,10 @@ provider-neutral protocols.
 | `ProductRepository` / `InventoryRepository` | SQLAlchemy persistence adapters below product-domain services |
 | `OrderHistoryService` | Orders, purchased items, recent sizes, and purchase summaries |
 | `ReturnHistoryService` | Return records, rates, reason summaries, and size/product evidence |
-| `FitProfileService` | Fit profile, brand adjustments, evidence construction, and deterministic risk |
+| `FitProfileService` | Fit profile and brand size adjustments |
+| `FitEvidenceService` / `FitEvidenceRepository` | Exact SKU, brand, category, exchange, and normalized fit-return evidence with SQL confined to the repository |
+| `FitRetrievalService` | Stable anonymized fit documents, replaceable embeddings, and similar-outcome retrieval |
+| `FitCalculator` / `FitPolicy` | Deterministic size recommendation, confidence, risk band, action, and downstream signals |
 | `LoyaltyService` | Current loyalty profile, transactions, and summaries |
 | `EngagementService` | Clickstream summaries and service-engagement records |
 | `UpsellPolicyService` | Consent, cooldown, frequency, propensity, candidate, and suppression rules |
@@ -469,9 +513,9 @@ normalize them to lists and dictionaries at the DTO boundary.
 ## 8. Controlled LLM gateway
 
 `LLMGateway` is the shared component for orchestrator intent detection, optional
-response synthesis, and optional Discovery explanations. It is not called by
-profiling or deterministic Discovery ranking and is not exposed directly
-through FastAPI.
+response synthesis, and optional Discovery/Fit explanations. It is not called
+by profiling or by deterministic Discovery ranking and Fit calculation, and it
+is not exposed directly through FastAPI.
 
 ```mermaid
 sequenceDiagram
@@ -528,6 +572,9 @@ logging.
 - `semantic_product_search` and `vector_search` when applicable;
 - `check_inventory`, `apply_hard_constraints`, and `personalized_ranking`;
 - `discovery_explanation` and `publish_discovery_signals`;
+- `fit_agent`, `fit_tool_discovery`, and one trace per Fit MCP invocation;
+- `build_fit_embedding_index` and `vector_fit_search` when applicable;
+- `calculate_fit_risk`, `apply_fit_policy`, and optional `fit_explanation`;
 - one tool trace per FastMCP invocation;
 - `llm_gateway.invoke`: governed logical model call;
 - `litellm.acompletion`: one trace per physical provider attempt.
@@ -546,7 +593,11 @@ safe to disable for local tests.
 | Planned agent not implemented | Orchestrator records `AGENT_UNAVAILABLE` and returns a controlled partial response |
 | Missing/mismatched profile tool scope | Graph stops with a discovery error; API returns `503` |
 | Missing/mismatched Discovery tool scope | Orchestrator records a dependency/execution error and does not fabricate recommendations |
+| Missing/mismatched Fit tool scope | Orchestrator records a dependency/execution error and does not fabricate size guidance |
 | Discovery explanation unavailable | Ranked products are returned with `explanation=null` |
+| Fit vector retrieval unavailable | Deterministic exact/brand/category evidence still produces the decision |
+| Fit explanation unavailable | Structured sizing and risk are returned with `explanation=null` |
+| Missing Fit history/profile | A weaker or `INSUFFICIENT_EVIDENCE` result is returned rather than invented certainty |
 | No in-stock constrained candidates | Successful `NO_RESULTS` Discovery result |
 | Optional enrichment unavailable | Profile still publishes with defaults and a data-quality flag |
 | Invalid request/response DTO | Pydantic rejects it at the relevant boundary |
@@ -570,9 +621,13 @@ Uvicorn process
   ├── one registered DiscoveryAgent
   │   ├── deterministic query strategy and ranking
   │   └── optional shared-gateway explanations
+  ├── one registered FitAgent
+  │   ├── MCP-only evidence collection and vector fit retrieval
+  │   ├── deterministic size/risk calculation and policy signals
+  │   └── optional shared-gateway explanation
   ├── one lazy ToolRuntime
   │   ├── SQLAlchemy engine/session factory
-  │   ├── in-memory product vector index
+  │   ├── in-memory product and fit vector indexes
   │   └── in-memory upsell policy state
   ├── in-process FastMCP servers/clients
   ├── optional LLMGateway instances
@@ -590,12 +645,15 @@ Configuration is environment-based:
   origins allowed to call the API;
 - `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, and `LANGSMITH_PROJECT` control
   tracing;
-- provider API keys are required only for LLM routes used in a demo;
+- `NVIDIA_NIM_API_KEY` authenticates development LLM routes and
+  `NVIDIA_NIM_API_BASE` selects the hosted or self-hosted NIM endpoint;
 - `LITELLM_LOCAL_MODEL_COST_MAP=True` keeps LiteLLM model-cost data local.
 - `NEUTAIL_RESPONSE_SYNTHESIS_LLM=true` opts into governed LLM prose
   synthesis; deterministic templates are the default.
 - `NEUTAIL_DISCOVERY_EXPLANATIONS_LLM=true` opts into explanations after
   deterministic ranking; the default is `false`.
+- `NEUTAIL_FIT_EXPLANATIONS_LLM=true` opts into explanations after the
+  deterministic Fit decision; the default is `false`.
 
 The application is started with:
 
@@ -637,9 +695,9 @@ The design is intentionally single-process. Before production use:
    verification, audience/issuer policy, rotation, and customer authorization.
 2. Move session lifecycle and revocation state into a shared store before
    running multiple API workers.
-3. Implement Fit and Upsell workflows against their scoped FastMCP servers;
-   consume Discovery recommendations/signals without moving their decisions
-   into Discovery.
+3. Implement the Upsell workflow against its scoped FastMCP server; consume
+   Discovery and Fit signals without moving specialist decisions into either
+   upstream agent.
 4. Move SQLite to a managed relational database and provide repository
    implementations for the remaining service areas.
 5. Replace process-local profile cache and upsell state with a TTL-based shared
@@ -669,6 +727,13 @@ The current automated suite covers:
 - exact Discovery tool scope and static boundary checks preventing direct SQL,
   vector-store, model-provider, Fit, or Upsell access;
 - the authenticated chat API's structured `discovery_result` contract;
+- exact Fit tool scope and static boundary checks preventing direct SQL,
+  repositories, model providers, Discovery, or Upsell access;
+- usual-size, prior-success, too-small/exchange, brand-adjustment, non-fit
+  return, unavailable-size, chronic-risk, insufficient-evidence, and
+  exact-evidence-over-vector decision cases;
+- Fit vector/provider and optional-explanation failure fallback behavior;
+- the authenticated chat API's structured `fit_result` contract;
 - LLM route/prompt resolution, direct LiteLLM wiring, structured output,
   retries, fallback, telemetry, and sanitized tracing behavior.
 

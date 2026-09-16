@@ -267,6 +267,7 @@ def test_authenticated_session_lifecycle_and_sanitized_context():
             json={
                 "session_id": session_id,
                 "message": "Show me my profile",
+                "selected_sku": None,
             },
         )
         updated_context = client.get(
@@ -310,6 +311,43 @@ def test_authenticated_session_lifecycle_and_sanitized_context():
     assert closed.status_code == 204
     assert closed.content == b""
     assert missing.status_code == 404
+
+
+def test_chat_accepts_and_persists_ui_selected_sku():
+    with TestClient(app) as client:
+        headers = _login_headers(client)
+        created = client.post("/api/v1/sessions", headers=headers)
+        session_id = created.json()["session_id"]
+        chat = client.post(
+            "/api/v1/chat",
+            headers=headers,
+            json={
+                "session_id": session_id,
+                "message": "Will size 12 fit me?",
+                "selected_sku": "SKU00001",
+            },
+        )
+        context = client.get(
+            f"/api/v1/sessions/{session_id}/context",
+            headers=headers,
+        )
+
+    assert chat.status_code == 200
+    assert chat.json()["extracted_entities"]["selected_sku"] == "SKU00001"
+    fit = chat.json()["fit_result"]
+    assert fit["status"] in {"SUCCESS", "INSUFFICIENT_EVIDENCE"}
+    assert fit["sku"] == "SKU00001"
+    assert fit["requested_size"] == "12"
+    assert fit["recommended_size"]
+    assert fit["action"] in {
+        "CONFIRM_SIZE",
+        "RECOMMEND_SIZE_CHANGE",
+        "SHOW_CAUTION",
+        "INSUFFICIENT_EVIDENCE",
+    }
+    assert fit["evidence_summary"]["vector_matches"] > 0
+    assert context.status_code == 200
+    assert context.json()["selected_sku"] == "SKU00001"
 
 
 def test_sessions_require_auth_and_hide_other_customer_sessions():

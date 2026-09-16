@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from models.dto import BrandSizeAdjustment, FitEvidence, FitProfile, FitRisk
+from models.dto import FitProfile
+from models.fit import FitEvidence, SimilarFitCase, SimilarFitCaseRequest
+from services.fit_evidence_service import FitEvidenceService
 from services.fit_profile_service import FitProfileService
+from services.fit_retrieval_service import FitRetrievalService
 from tools.contracts import tool_contract
 from tools.runtime import get_runtime
 
@@ -33,40 +36,26 @@ def fit_build_evidence(
     requested_size: Optional[str] = None,
 ) -> FitEvidence:
     with get_runtime().session() as session:
-        return FitProfileService(session).build_fit_evidence(
-            customer_id, sku, requested_size
-        )
+        return FitEvidenceService(session).build(customer_id, sku, requested_size)
 
 
 @tool_contract(
-    name="fit_get_brand_adjustment",
-    title="Get Brand Size Adjustment",
-    description="Return a known customer size adjustment and evidence count for a brand.",
-    capability="fit.brand.adjustment",
+    name="fit_retrieve_similar_cases",
+    title="Retrieve Similar Fit Cases",
+    description="Retrieve anonymized historical fit outcomes from the vector fit index.",
+    capability="fit.vector.search",
 )
-def fit_get_brand_adjustment(
-    customer_id: str, brand: str
-) -> BrandSizeAdjustment:
+def fit_retrieve_similar_cases(
+    request: SimilarFitCaseRequest,
+) -> list[SimilarFitCase]:
     with get_runtime().session() as session:
-        return FitProfileService(session).get_brand_adjustment(customer_id, brand)
-
-
-@tool_contract(
-    name="fit_calculate_risk",
-    title="Calculate Fit Risk",
-    description="Calculate a transparent deterministic fit-risk score, band, and reason codes.",
-    capability="fit.risk.calculate",
-)
-def fit_calculate_risk(customer_id: str, sku: str) -> FitRisk:
-    with get_runtime().session() as session:
-        return FitProfileService(session).calculate_fit_risk(customer_id, sku)
+        return FitRetrievalService(session).retrieve(request)
 
 
 FIT_TOOLS = (
     fit_get_profile,
     fit_build_evidence,
-    fit_get_brand_adjustment,
-    fit_calculate_risk,
+    fit_retrieve_similar_cases,
 )
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from agents.discovery import DiscoveryAgent, DiscoveryRequest
+from agents.fit import FitAgent, FitRequest
 from agents.profiling import ProfileAgent, ProfileAgentRequest
 from llm_gateway import LLMGateway
 from orchestrator.models import (
@@ -17,6 +18,7 @@ from tools.contracts import ToolDescriptor
 from tools.permissions import (
     AgentName,
     DISCOVERY_AGENT_TOOLS,
+    FIT_AGENT_TOOLS,
     PROFILE_AGENT_TOOLS,
 )
 
@@ -109,6 +111,61 @@ class DiscoveryAgentAdapter:
         )
 
 
+class FitAgentAdapter:
+    """Adapt FitAgent while enforcing selected-product and tool boundaries."""
+
+    def __init__(self, agent: FitAgent) -> None:
+        self.agent = agent
+
+    async def execute(
+        self, state: NeuTailState, tools: list[ToolDescriptor]
+    ) -> AgentResult:
+        discovered_names = {tool.name for tool in tools}
+        if discovered_names != FIT_AGENT_TOOLS:
+            raise AgentDependencyError(
+                "Fit Agent capability mismatch: "
+                f"expected={sorted(FIT_AGENT_TOOLS)}, "
+                f"actual={sorted(discovered_names)}"
+            )
+
+        session = state["session"]
+        if not session.selected_sku:
+            return AgentResult(
+                agent_name=AgentName.FIT,
+                status=AgentRunStatus.FAILED,
+                state_updates={
+                    "fit_result": {
+                        "status": "INVALID_REQUEST",
+                        "sku": None,
+                        "requested_size": session.requested_size,
+                        "reason_codes": ["SELECTED_SKU_REQUIRED"],
+                        "errors": ["NO_SELECTED_SKU"],
+                    }
+                },
+                error="SELECTED_SKU_REQUIRED",
+            )
+
+        request = state["request"]
+        result = await self.agent.execute(
+            FitRequest(
+                customer_context=state["customer_context"],
+                session_context=session,
+                sku=session.selected_sku,
+                requested_size=session.requested_size,
+                trace_id=request.trace_id,
+            )
+        )
+        successful = result.status in {"SUCCESS", "INSUFFICIENT_EVIDENCE"}
+        return AgentResult(
+            agent_name=AgentName.FIT,
+            status=(
+                AgentRunStatus.SUCCESS if successful else AgentRunStatus.FAILED
+            ),
+            state_updates={"fit_result": result.model_dump(mode="json")},
+            error=None if successful else result.status,
+        )
+
+
 _DESCRIPTORS = (
     AgentDescriptor(
         name=AgentName.PROFILING,
@@ -137,9 +194,14 @@ _DESCRIPTORS = (
     AgentDescriptor(
         name=AgentName.FIT,
         display_name="FitAgent",
-        capabilities=["fit-evidence", "size-guidance"],
+        capabilities=[
+            "fit-evidence",
+            "vector-fit-retrieval",
+            "deterministic-size-guidance",
+            "return-prevention",
+        ],
         supported_intents=["FIT_QUERY"],
-        implemented=False,
+        implemented=True,
     ),
     AgentDescriptor(
         name=AgentName.UPSELL,
@@ -158,15 +220,20 @@ class AgentRegistry:
         self,
         profile_agent: ProfileAgent | None = None,
         discovery_agent: DiscoveryAgent | None = None,
+        fit_agent: FitAgent | None = None,
         llm_gateway: LLMGateway | None = None,
     ) -> None:
+        shared_gateway = llm_gateway or LLMGateway()
         self._adapters: dict[AgentName, OrchestratedAgent] = {
             AgentName.PROFILING: ProfilingAgentAdapter(
                 profile_agent or ProfileAgent()
             ),
             AgentName.DISCOVERY: DiscoveryAgentAdapter(
                 discovery_agent
-                or DiscoveryAgent(llm_gateway=llm_gateway or LLMGateway())
+                or DiscoveryAgent(llm_gateway=shared_gateway)
+            ),
+            AgentName.FIT: FitAgentAdapter(
+                fit_agent or FitAgent(llm_gateway=shared_gateway)
             ),
         }
         self._descriptors = {item.name: item for item in _DESCRIPTORS}
@@ -207,6 +274,7 @@ __all__ = [
     "AgentRegistry",
     "AgentUnavailableError",
     "DiscoveryAgentAdapter",
+    "FitAgentAdapter",
     "OrchestratedAgent",
     "ProfilingAgentAdapter",
 ]

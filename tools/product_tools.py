@@ -29,45 +29,21 @@ def product_get(sku: str) -> Product:
         return ProductCatalogService(session).get_product(sku)
 
 
-@tool_contract(
-    name="inventory_get",
-    title="Get Inventory",
-    description="Return authoritative aggregate availability and all store/DC balances for a SKU.",
-    capability="product.inventory.summary",
-)
 def inventory_get(sku: str) -> InventorySummary:
     with get_runtime().session() as session:
         return InventoryService(session).get_inventory(sku)
 
 
-@tool_contract(
-    name="inventory_get_by_location",
-    title="Get Location Inventory",
-    description="Return the authoritative inventory balance for one SKU and location.",
-    capability="product.inventory.location",
-)
 def inventory_get_by_location(sku: str, location_id: str) -> InventoryRecord:
     with get_runtime().session() as session:
         return InventoryService(session).get_inventory_by_location(sku, location_id)
 
 
-@tool_contract(
-    name="inventory_is_available",
-    title="Check Product Availability",
-    description="Check whether summed SKU availability across locations meets a minimum quantity.",
-    capability="product.inventory.available",
-)
 def inventory_is_available(sku: str, min_qty: int = 1) -> bool:
     with get_runtime().session() as session:
         return InventoryService(session).is_available(sku, min_qty)
 
 
-@tool_contract(
-    name="inventory_get_available_skus",
-    title="Bulk Check Product Availability",
-    description="Check availability for ranked SKU candidates using one grouped database query.",
-    capability="product.inventory.bulk_available",
-)
 def inventory_get_available_skus(skus: list[str]) -> dict[str, bool]:
     with get_runtime().session() as session:
         return InventoryService(session).get_available_skus(skus)
@@ -124,10 +100,6 @@ def semantic_product_search(
 
 PRODUCT_TOOLS = (
     product_get,
-    inventory_get,
-    inventory_get_by_location,
-    inventory_is_available,
-    inventory_get_available_skus,
     search_products,
     get_product_details,
     check_inventory,

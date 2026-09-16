@@ -1,21 +1,23 @@
-# Neu.Tail Mission 4 — Orchestrator, Profile, and Discovery Agents
+# Neu.Tail Mission 4 — Orchestrator, Profile, Discovery, and Fit Agents
 
 See [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md) for the as-built component design,
 runtime flows, tool permissions, persistence model, observability, and known
 demo limitations.
 
-This slice implements the deterministic Profiling Agent and Discovery Agent.
-Profile builds and caches `CustomerContext`; Discovery consumes that context,
-uses an exact four-tool FastMCP scope, supports structured, semantic,
+This slice implements the deterministic Profiling, Discovery, and Size & Fit
+Agents. Profile builds and caches `CustomerContext`; Discovery consumes that
+context, uses an exact four-tool FastMCP scope, supports structured, semantic,
 similar-item, and hybrid retrieval, filters live inventory and hard constraints,
-then applies explainable segment-aware ranking.
+then applies explainable segment-aware ranking. Fit combines exact product,
+brand, category, return, exchange, inventory, and vector-retrieved outcome
+evidence to produce deterministic size guidance and fit-risk signals.
 
 The LangGraph orchestrator adds identity validation, multi-turn session state,
 hybrid intent detection, runtime capability discovery, deterministic agent
 planning, structured invocation, response synthesis, and trace propagation.
-Profile and Discovery requests execute end to end. Fit and Upsell remain
-separate and are reported as unavailable instead of having their decisions
-duplicated in Discovery or the orchestrator.
+Profile, Discovery, and Fit requests execute end to end. Upsell remains
+separate and is reported as unavailable instead of having its decisions
+duplicated in Discovery, Fit, or the orchestrator.
 
 ## Run
 
@@ -125,12 +127,27 @@ strategy, ranked recommendations, score components/reason codes, counts, and
 downstream signals. Inventory and exact price constraints are enforced outside
 the vector index.
 
+Ask for size guidance by supplying a selected SKU either in the message or in
+the explicit UI field:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/chat" \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer ${NEUTAIL_DEMO_TOKEN}" \
+  -d '{"session_id":"demo-session","message":"Will size 12 fit me?","selected_sku":"SKU00001"}'
+```
+
+The response includes a structured `fit_result` containing the requested and
+recommended sizes, confidence, risk score/band, action, reason codes, evidence
+counts, and downstream risk signals. The recommendation is calculated in code;
+an LLM can only verbalize that fixed result.
+
 ## LangSmith
 
 Export the values shown in `.env.example` before starting Uvicorn. LangGraph
 runs, individual MCP tool calls, segmentation, latency, session ID, customer ID,
-and trace ID will then appear under the configured LangSmith project. No model
-provider key is needed because profiling is deterministic and makes no LLM call.
+and trace ID will then appear under the configured LangSmith project. Profiling
+and all Fit decisions remain deterministic and make no required LLM call.
 
 ## LLM Gateway
 
@@ -154,8 +171,11 @@ intent = await gateway.invoke(
 ```
 
 Routes and policies are in `llm_gateway/config/models.yaml`; prompts are in
-`llm_gateway/prompts/`. Configure only the provider keys needed by the routes
-you plan to demonstrate. The Profiling Agent does not use this gateway because
+`llm_gateway/prompts/`. Development routes use NVIDIA NIM through LiteLLM:
+Z.ai GLM-5.3 is the primary model for every use case, with NVIDIA-hosted
+OpenAI GPT-OSS-20B as the fallback. Set `NVIDIA_NIM_API_KEY` and leave
+`NVIDIA_NIM_API_BASE=https://integrate.api.nvidia.com/v1`. The Profiling Agent
+does not use this gateway because
 its segment classification is intentionally deterministic. The orchestrator
 uses deterministic rules for clear intent and the gateway's `intent/v3` prompt
 for ambiguity. Set `NEUTAIL_RESPONSE_SYNTHESIS_LLM=true` to verbalize structured
@@ -167,8 +187,18 @@ Discovery ranking never uses an LLM. Set
 the already-ranked products; an explanation failure leaves the recommendations
 intact.
 
+Fit sizing and risk calculation also never use an LLM. Set
+`NEUTAIL_FIT_EXPLANATIONS_LLM=true` only to verbalize the completed decision;
+provider failure leaves the structured Fit result intact.
+
 ## Verify
 
 ```bash
 LANGSMITH_TRACING=false ./bin/python -m pytest -q
+```
+
+Start the development API with `.env` loaded:
+
+```bash
+./bin/uvicorn api.main:app --reload --env-file .env --log-level debug
 ```

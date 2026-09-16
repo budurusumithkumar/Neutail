@@ -292,6 +292,7 @@ async def chat(
             session_id=payload.session_id,
             message=payload.message,
             trace_id=request.state.request_id,
+            selected_sku=payload.selected_sku,
         )
     )
 

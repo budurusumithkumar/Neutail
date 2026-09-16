@@ -1,8 +1,8 @@
 routes:
   intent_detection:
     logical_model: fast
-    primary_model: gemini/gemini-2.5-flash
-    fallback_model: openai/gpt-5-mini
+    primary_model: nvidia_nim/z-ai/glm-5.3
+    fallback_model: nvidia_nim/openai/gpt-oss-20b
     prompt_group: intent
     default_prompt_version: v1
     policy:
@@ -16,8 +16,8 @@ routes:
 
   product_explanation:
     logical_model: general
-    primary_model: openai/gpt-5
-    fallback_model: gemini/gemini-2.5-pro
+    primary_model: nvidia_nim/z-ai/glm-5.3
+    fallback_model: nvidia_nim/openai/gpt-oss-20b
     prompt_group: discovery
     default_prompt_version: v1
     policy:
@@ -31,8 +31,8 @@ routes:
 
   discovery_explanation:
     logical_model: general
-    primary_model: openai/gpt-5
-    fallback_model: gemini/gemini-2.5-pro
+    primary_model: nvidia_nim/z-ai/glm-5.3
+    fallback_model: nvidia_nim/openai/gpt-oss-20b
     prompt_group: discovery
     default_prompt_version: v1
     policy:
@@ -46,8 +46,8 @@ routes:
 
   fit_explanation:
     logical_model: general
-    primary_model: openai/gpt-5
-    fallback_model: gemini/gemini-2.5-pro
+    primary_model: nvidia_nim/z-ai/glm-5.3
+    fallback_model: nvidia_nim/openai/gpt-oss-20b
     prompt_group: fit
     default_prompt_version: v1
     policy:
@@ -61,8 +61,8 @@ routes:
 
   upsell_message:
     logical_model: fast
-    primary_model: gemini/gemini-2.5-flash
-    fallback_model: openai/gpt-5-mini
+    primary_model: nvidia_nim/z-ai/glm-5.3
+    fallback_model: nvidia_nim/openai/gpt-oss-20b
     prompt_group: upsell
     default_prompt_version: v1
     policy:
@@ -76,8 +76,8 @@ routes:
 
   optional_summary:
     logical_model: fast
-    primary_model: openai/gpt-5-mini
-    fallback_model: ollama/llama3.2
+    primary_model: nvidia_nim/z-ai/glm-5.3
+    fallback_model: nvidia_nim/openai/gpt-oss-20b
     prompt_group: summary
     default_prompt_version: v1
     policy:
@@ -91,8 +91,8 @@ routes:
 
   response_synthesis:
     logical_model: fast
-    primary_model: openai/gpt-5-mini
-    fallback_model: gemini/gemini-2.5-flash
+    primary_model: nvidia_nim/z-ai/glm-5.3
+    fallback_model: nvidia_nim/openai/gpt-oss-20b
     prompt_group: response
     default_prompt_version: v1
     policy:

@@ -94,7 +94,11 @@ def test_multi_turn_context_avoids_reprofiling_and_keeps_entities():
     assert second.extracted_entities["requested_size"] == "12"
     assert second.extracted_entities["selected_sku"] == "SKU00001"
     assert second.customer_context == first.customer_context
-    assert second.errors == ["AGENT_UNAVAILABLE:fit_agent"]
+    assert second.completed_agents == [AgentName.FIT]
+    assert second.errors == []
+    assert second.fit_result is not None
+    assert second.fit_result["status"] in {"SUCCESS", "INSUFFICIENT_EVIDENCE"}
+    assert second.fit_result["sku"] == "SKU00001"
     assert second.turn_count == 2
     stored = orchestrator.session_service.get_context(
         "multi-turn-session", "CUST001"
@@ -198,11 +202,15 @@ def test_unknown_customer_and_cross_customer_session_are_rejected():
     asyncio.run(scenario())
 
 
-def test_agent_registry_reports_profile_and_discovery_as_implemented():
+def test_agent_registry_reports_profile_discovery_and_fit_as_implemented():
     descriptors = NeuTailOrchestrator().agent_registry.list_agents()
     implemented = {item.name for item in descriptors if item.implemented}
 
-    assert implemented == {AgentName.PROFILING, AgentName.DISCOVERY}
+    assert implemented == {
+        AgentName.PROFILING,
+        AgentName.DISCOVERY,
+        AgentName.FIT,
+    }
     assert {item.name for item in descriptors} == set(AgentName)
 
 

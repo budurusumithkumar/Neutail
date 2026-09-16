@@ -32,6 +32,7 @@ class ChatRequest(DTOModel):
 
     message: str = Field(min_length=1, max_length=2_000)
     session_id: str = Field(min_length=1, max_length=128)
+    selected_sku: Optional[str] = Field(default=None, min_length=1, max_length=128)
 
 
 class OrchestratorRequest(DTOModel):
@@ -41,6 +42,7 @@ class OrchestratorRequest(DTOModel):
     session_id: str = Field(min_length=1, max_length=128)
     message: str = Field(min_length=1, max_length=2_000)
     trace_id: str = Field(min_length=1, max_length=128)
+    selected_sku: Optional[str] = Field(default=None, min_length=1, max_length=128)
 
 
 class ConversationTurn(DTOModel):
@@ -125,6 +127,8 @@ class OrchestratorResponse(DTOModel):
     extracted_entities: dict[str, Optional[str]] = Field(default_factory=dict)
     customer_context: Optional[CustomerContext] = None
     discovery_result: Optional[dict[str, Any]] = None
+    fit_result: Optional[dict[str, Any]] = None
+    upsell_result: Optional[dict[str, Any]] = None
     agent_outputs: dict[str, Any] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
     turn_count: int = Field(ge=1)

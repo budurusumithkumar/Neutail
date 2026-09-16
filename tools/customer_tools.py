@@ -135,23 +135,11 @@ def customer_get_profile_facts(customer_id: str) -> CustomerProfileFacts:
         return CustomerProfileService(session).get_profile_facts(customer_id)
 
 
-@tool_contract(
-    name="customer_get_orders",
-    title="Get Customer Orders",
-    description="Return customer orders within a calendar-month history window, newest first.",
-    capability="customer.orders.list",
-)
 def customer_get_orders(customer_id: str, months: int = 12) -> list[Order]:
     with get_runtime().session() as session:
         return OrderHistoryService(session).get_orders(customer_id, months)
 
 
-@tool_contract(
-    name="customer_get_order_items",
-    title="Get Purchased Items",
-    description="Return item-level purchase history within a calendar-month window.",
-    capability="customer.orders.items",
-)
 def customer_get_order_items(
     customer_id: str, months: int = 12
 ) -> list[PurchasedItem]:
@@ -159,12 +147,6 @@ def customer_get_order_items(
         return OrderHistoryService(session).get_order_items(customer_id, months)
 
 
-@tool_contract(
-    name="customer_get_purchase_summary",
-    title="Get Purchase Summary",
-    description="Aggregate customer spend, categories, brands, sizes, and channel mix.",
-    capability="customer.orders.summary",
-)
 def customer_get_purchase_summary(
     customer_id: str, months: int = 12
 ) -> PurchaseSummary:
@@ -172,12 +154,6 @@ def customer_get_purchase_summary(
         return OrderHistoryService(session).get_purchase_summary(customer_id, months)
 
 
-@tool_contract(
-    name="customer_get_recent_sizes",
-    title="Get Recent Purchased Sizes",
-    description="Return recent purchased sizes with product evidence and an optional category filter.",
-    capability="customer.orders.sizes",
-)
 def customer_get_recent_sizes(
     customer_id: str, category: Optional[str] = None
 ) -> list[SizeHistoryItem]:
@@ -185,12 +161,6 @@ def customer_get_recent_sizes(
         return OrderHistoryService(session).get_recent_sizes(customer_id, category)
 
 
-@tool_contract(
-    name="customer_get_returns",
-    title="Get Customer Returns",
-    description="Return detailed customer return history within a calendar-month window.",
-    capability="customer.returns.list",
-)
 def customer_get_returns(
     customer_id: str, months: int = 12
 ) -> list[ReturnRecord]:
@@ -211,12 +181,6 @@ def customer_get_return_summary(
         return ReturnHistoryService(session).get_return_summary(customer_id, months)
 
 
-@tool_contract(
-    name="customer_get_product_returns",
-    title="Get Product Return Evidence",
-    description="Fetch a customer's return evidence filtered by optional SKU and brand.",
-    capability="customer.returns.product",
-)
 def customer_get_product_returns(
     customer_id: str,
     sku: Optional[str] = None,
@@ -228,12 +192,6 @@ def customer_get_product_returns(
         )
 
 
-@tool_contract(
-    name="customer_get_size_related_returns",
-    title="Get Size-Related Returns",
-    description="Fetch returns caused by explicit size or fit issues for explainable fit evidence.",
-    capability="customer.returns.fit",
-)
 def customer_get_size_related_returns(customer_id: str) -> list[ReturnRecord]:
     with get_runtime().session() as session:
         return ReturnHistoryService(session).get_size_related_returns(customer_id)
@@ -284,14 +242,7 @@ CUSTOMER_TOOLS = (
     customer_get_master,
     customer_get_preferences,
     customer_get_profile_facts,
-    customer_get_orders,
-    customer_get_order_items,
-    customer_get_purchase_summary,
-    customer_get_recent_sizes,
-    customer_get_returns,
     customer_get_return_summary,
-    customer_get_product_returns,
-    customer_get_size_related_returns,
     customer_get_loyalty_profile,
     customer_get_loyalty_transactions,
     customer_get_loyalty_summary,

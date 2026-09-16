@@ -61,6 +61,8 @@ def test_every_configured_route_resolves_a_versioned_prompt():
         route = router.resolve(use_case)
         prompt = prompts.load(route.prompt_group, route.default_prompt_version)
         assert prompt.version == route.default_prompt_version
+        assert route.primary_model == "nvidia_nim/z-ai/glm-5.3"
+        assert route.fallback_model == "nvidia_nim/openai/gpt-oss-20b"
 
 
 def test_discovery_prompt_forbids_fact_invention_and_reranking():
@@ -119,7 +121,7 @@ def test_gateway_returns_validated_structured_output_and_accounts_tokens():
     result, records = asyncio.run(scenario())
     assert isinstance(result, IntentResult)
     assert result.intent == "PRODUCT_DISCOVERY"
-    assert received[0]["model"] == "gemini/gemini-2.5-flash"
+    assert received[0]["model"] == "nvidia_nim/z-ai/glm-5.3"
     assert received[0]["response_format"] is IntentResult
     assert records[0].status is LLMCallStatus.SUCCESS
     assert records[0].total_tokens == 15
@@ -159,7 +161,7 @@ def test_invalid_structured_output_is_retried_centrally():
 
 def test_primary_provider_failure_uses_configured_fallback():
     async def fake_completion(**kwargs):
-        if kwargs["model"].startswith("gemini/"):
+        if kwargs["model"] == "nvidia_nim/z-ai/glm-5.3":
             raise RuntimeError("provider unavailable")
         return _response("A concise eligible offer.", model=kwargs["model"])
 
@@ -184,7 +186,8 @@ def test_primary_provider_failure_uses_configured_fallback():
         LLMCallStatus.FAILED,
         LLMCallStatus.FALLBACK_SUCCESS,
     ]
-    assert records[-1].provider_model == "openai/gpt-5-mini"
+    assert records[-1].provider == "nvidia_nim"
+    assert records[-1].provider_model == "nvidia_nim/openai/gpt-oss-20b"
 
 
 def test_all_provider_failures_are_normalized():

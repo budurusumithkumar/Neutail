@@ -172,6 +172,23 @@ class ResponseSynthesizer:
                 ]
                 if names:
                     return "My top matches are " + ", ".join(names) + "."
+        fit = state.get("fit_result")
+        if intent.intent == "FIT_QUERY" and fit is not None:
+            if fit.get("explanation"):
+                return str(fit["explanation"])
+            recommended_size = fit.get("recommended_size")
+            requested_size = fit.get("requested_size")
+            if recommended_size and recommended_size != requested_size:
+                return (
+                    f"Size {recommended_size} is likely to be a better fit based "
+                    "on your available fit history."
+                )
+            if recommended_size:
+                return (
+                    f"Size {recommended_size} is the strongest match from your "
+                    "available fit evidence."
+                )
+            return "I do not have enough fit evidence to recommend a size confidently."
         required_agent = {
             "PRODUCT_DISCOVERY": AgentName.DISCOVERY.value,
             "FIT_QUERY": AgentName.FIT.value,
@@ -296,6 +313,8 @@ class NeuTailOrchestrator:
             extracted_entities=result.get("extracted_entities", {}),
             customer_context=result.get("customer_context"),
             discovery_result=result.get("discovery_result"),
+            fit_result=result.get("fit_result"),
+            upsell_result=result.get("upsell_result"),
             agent_outputs=result.get("agent_outputs", {}),
             errors=result.get("errors", []),
             turn_count=session.turn_count,
@@ -345,12 +364,16 @@ class NeuTailOrchestrator:
         return {"intent_result": await self.intent_detector.detect(state)}
 
     async def _merge_context(self, state: NeuTailState) -> dict[str, Any]:
+        request = state["request"]
         intent = state["intent_result"]
         session = state["session"].model_copy(deep=True)
-        for field in ("category", "occasion", "selected_sku", "requested_size"):
+        for field in ("category", "occasion", "requested_size"):
             value = getattr(intent, field)
             if value is not None:
                 setattr(session, field, value)
+        selected_sku = request.selected_sku or intent.selected_sku
+        if selected_sku is not None:
+            session.selected_sku = selected_sku
         return {
             "session": session,
             "extracted_entities": session.entity_context(),
