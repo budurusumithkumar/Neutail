@@ -7,6 +7,12 @@ from typing import Protocol
 from agents.discovery import DiscoveryAgent, DiscoveryRequest
 from agents.fit import FitAgent, FitRequest
 from agents.profiling import ProfileAgent, ProfileAgentRequest
+from agents.upsell import (
+    UpsellAgent,
+    UpsellRequest,
+    UpsellTrigger,
+    UpsellTriggerType,
+)
 from llm_gateway import LLMGateway
 from orchestrator.models import (
     AgentDescriptor,
@@ -20,6 +26,7 @@ from tools.permissions import (
     DISCOVERY_AGENT_TOOLS,
     FIT_AGENT_TOOLS,
     PROFILE_AGENT_TOOLS,
+    UPSELL_AGENT_REQUIRED_TOOLS,
 )
 
 
@@ -166,6 +173,71 @@ class FitAgentAdapter:
         )
 
 
+class UpsellAgentAdapter:
+    """Adapt the governed UpsellAgent and preserve orchestrator-owned routing."""
+
+    def __init__(self, agent: UpsellAgent) -> None:
+        self.agent = agent
+
+    async def execute(
+        self, state: NeuTailState, tools: list[ToolDescriptor]
+    ) -> AgentResult:
+        discovered_names = {tool.name for tool in tools}
+        missing = UPSELL_AGENT_REQUIRED_TOOLS.difference(discovered_names)
+        if missing:
+            raise AgentDependencyError(
+                "Upsell Agent capability mismatch: "
+                f"missing={sorted(missing)}"
+            )
+
+        session = state["session"]
+        trigger_payload = state.get("upsell_trigger")
+        if trigger_payload is not None:
+            trigger = UpsellTrigger.model_validate(trigger_payload)
+        else:
+            raw_strength = session.attributes.get("styling_engagement_score", 0.0)
+            strength = (
+                float(raw_strength)
+                if isinstance(raw_strength, (int, float))
+                and not isinstance(raw_strength, bool)
+                and 0 <= raw_strength <= 1
+                else 0.0
+            )
+            trigger = UpsellTrigger(
+                trigger_type=UpsellTriggerType.STYLING_ENGAGEMENT,
+                source_agent="Orchestrator",
+                sku=session.selected_sku,
+                strength=strength,
+            )
+
+        raw_cart_value = session.attributes.get("cart_value_gbp")
+        cart_value = (
+            float(raw_cart_value)
+            if isinstance(raw_cart_value, (int, float))
+            and not isinstance(raw_cart_value, bool)
+            and raw_cart_value >= 0
+            else None
+        )
+        result = await self.agent.execute(
+            UpsellRequest(
+                customer_context=state["customer_context"],
+                session_context=session,
+                trigger=trigger,
+                selected_sku=trigger.sku or session.selected_sku,
+                cart_value_gbp=cart_value,
+            )
+        )
+        successful = result.status in {"OFFER_AVAILABLE", "NO_OFFER"}
+        return AgentResult(
+            agent_name=AgentName.UPSELL,
+            status=(
+                AgentRunStatus.SUCCESS if successful else AgentRunStatus.FAILED
+            ),
+            state_updates={"upsell_result": result.model_dump(mode="json")},
+            error=None if successful else "UPSELL_FAILED_CLOSED",
+        )
+
+
 _DESCRIPTORS = (
     AgentDescriptor(
         name=AgentName.PROFILING,
@@ -208,7 +280,7 @@ _DESCRIPTORS = (
         display_name="UpsellAgent",
         capabilities=["service-eligibility", "offer-explanation"],
         supported_intents=["SERVICE_QUERY"],
-        implemented=False,
+        implemented=True,
     ),
 )
 
@@ -221,6 +293,7 @@ class AgentRegistry:
         profile_agent: ProfileAgent | None = None,
         discovery_agent: DiscoveryAgent | None = None,
         fit_agent: FitAgent | None = None,
+        upsell_agent: UpsellAgent | None = None,
         llm_gateway: LLMGateway | None = None,
     ) -> None:
         shared_gateway = llm_gateway or LLMGateway()
@@ -234,6 +307,9 @@ class AgentRegistry:
             ),
             AgentName.FIT: FitAgentAdapter(
                 fit_agent or FitAgent(llm_gateway=shared_gateway)
+            ),
+            AgentName.UPSELL: UpsellAgentAdapter(
+                upsell_agent or UpsellAgent(llm_gateway=shared_gateway)
             ),
         }
         self._descriptors = {item.name: item for item in _DESCRIPTORS}
@@ -277,4 +353,5 @@ __all__ = [
     "FitAgentAdapter",
     "OrchestratedAgent",
     "ProfilingAgentAdapter",
+    "UpsellAgentAdapter",
 ]

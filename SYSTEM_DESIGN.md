@@ -5,7 +5,7 @@
 Neu.Tail is a demo retail-assistant backend organized around agent-scoped tools,
 deterministic domain services, and a controlled LLM gateway. The currently
 executable application is a vertical slice for customer profiling, product
-discovery, and size-and-fit guidance:
+discovery, size-and-fit guidance, and governed service offers:
 
 - FastAPI exposes health, profile construction, and profile-tool discovery.
 - A LangGraph orchestrator validates identity, manages multi-turn state,
@@ -16,6 +16,9 @@ discovery, and size-and-fit guidance:
   similar-item, or hybrid retrieval, and ranks candidates deterministically.
 - `FitAgent` combines exact, brand, category, return, exchange, inventory, and
   vector-retrieved evidence, then calculates size guidance and risk in code.
+- `UpsellAgent` consumes orchestrator-routed triggers, calls deterministic
+  eligibility policy through FastMCP, scores only eligible opportunities, and
+  uses the LLM Gateway only for optional customer-facing wording.
 - Each implemented agent discovers and calls only its exact permitted FastMCP
   tool set.
 - Tool adapters call deterministic domain services backed by SQLAlchemy and a
@@ -27,10 +30,10 @@ discovery, and size-and-fit guidance:
   response, Discovery, and Fit prose; segmentation, product ranking, sizing,
   and fit-risk decisions never use an LLM.
 
-Upsell remains a future specialised-agent slice. Discovery publishes ranked
-product data and engagement signals through the orchestrator but never
-calculates fit or makes service-eligibility decisions. Fit owns sizing and fit
-risk without invoking Discovery or Upsell.
+Discovery publishes ranked product data and engagement signals through the
+orchestrator but never calculates fit or makes service-eligibility decisions.
+Fit owns sizing and fit risk without invoking Discovery or Upsell. The
+orchestrator alone converts their downstream signals into Upsell requests.
 The authentication boundary issues and validates signed demo JWTs, while token
 revocation and session context remain process-local.
 
@@ -53,10 +56,12 @@ flowchart LR
     O --> PA[LangGraph ProfileAgent]
     O --> DA[DiscoveryAgent]
     O --> FA[FitAgent]
+    O --> UA[UpsellAgent]
     O -->|identity and capability discovery| MCP
     PA -->|MCP discovery and calls| MCP[Agent-scoped FastMCP server]
     DA -->|MCP discovery and calls| MCP
     FA -->|MCP discovery and calls| MCP
+    UA -->|MCP discovery and calls| MCP
     MCP --> DS[Domain services]
     DS --> ORM[SQLAlchemy ORM]
     ORM --> DB[(Seeded SQLite database)]
@@ -64,7 +69,7 @@ flowchart LR
     O -->|ambiguous intent / optional synthesis| GW[LLM Gateway]
     DA -->|optional ranked-product explanation| GW
     FA -->|optional fixed-decision explanation| GW
-    O -.-> Future[Future Upsell agent]
+    UA -->|eligible-offer wording only| GW
     GW --> Lite[LiteLLM]
     Lite -.-> Providers[NVIDIA NIM models]
 
@@ -72,11 +77,11 @@ flowchart LR
     PA -. graph and tool traces .-> LS
     DA -. retrieval and ranking traces .-> LS
     FA -. evidence, retrieval, and decision traces .-> LS
+    UA -. policy, scoring, selection, and wording traces .-> LS
     GW -. sanitized LLM traces .-> LS
 ```
 
-Solid lines are active runtime paths. Dashed lines represent optional
-observability or the specialised-agent extension not yet implemented.
+Solid lines are active runtime paths. Dashed lines represent observability.
 
 ## 4. Logical architecture
 
@@ -225,9 +230,11 @@ Clear profile, discovery, fit, and service requests are detected by transparent
 rules. Ambiguous text is sent to `LLMGateway.invoke()` with current session
 entities and a Pydantic `IntentResult`. The deterministic planner prepends
 Profiling only when `CustomerContext` is absent, then orders Discovery, Fit, and
-Upsell for primary and secondary intents. Discovery and Fit are implemented;
-Upsell returns a centralized `AGENT_UNAVAILABLE` result. The orchestrator never
-substitutes its own product-ranking, fit, or upsell logic.
+Upsell for primary and secondary intents. All four specialists are implemented.
+After Discovery or Fit returns, the orchestrator inspects typed downstream
+signals and dynamically appends Upsell when it sees
+`HIGH_PRODUCT_ENGAGEMENT` or `CHRONIC_FIT_RISK`. The orchestrator never
+substitutes its own product-ranking, fit, eligibility, or offer-selection logic.
 
 Sessions are bound to the first customer identity that uses them. They retain
 category, occasion, selected SKU, requested size, customer context, last intent,
@@ -377,6 +384,73 @@ authoritative evidence. Non-fit returns do not influence sizing. Unavailable
 sizes, missing history, provider failures, and chronic fit-return behavior all
 produce explicit actions, reason codes, or downstream signals.
 
+### Governed service-offer execution sequence
+
+```mermaid
+sequenceDiagram
+    participant O as Orchestrator
+    participant U as UpsellAgent
+    participant M as Scoped FastMCP
+    participant P as UpsellPolicyService
+    participant G as LLM Gateway
+    O->>U: CustomerContext + session + typed trigger
+    U->>M: get_loyalty_profile
+    U->>M: get_engagement_summary
+    U->>M: evaluate_upsell
+    M->>P: ordered deterministic rules
+    P-->>U: eligible offers or suppression reasons
+    alt suppressed or ineligible
+        U-->>O: NO_OFFER (no model call)
+    else eligible
+        U->>U: deterministic opportunity score
+        U->>U: select only from eligible offers
+        U->>G: word immutable selected offer
+        U->>M: record_upsell_event(OFFER_SHOWN)
+        U-->>O: OFFER_AVAILABLE + explicit-consent requirement
+    end
+```
+
+Policy order is request/context validation, active subscription, explicit
+suppression, recent Style+ decline, 30-day frequency limit, trigger validation,
+and service eligibility. Only then may scoring and selection run. Thresholds
+live in `UpsellPolicyConfig`; score weights and the offer catalogue live in
+`agents/upsell/constants.py`. `STYLING_ADVISORY` is the value-first option;
+`STYLE_PLUS_TRIAL` and `STYLE_PLUS` are considered only when policy and segment
+rules permit them. No path enrolls a customer or generates a discount.
+
+### UI engagement and decision-event sequence
+
+```mermaid
+sequenceDiagram
+    participant UI as Web UI
+    participant API as FastAPI
+    participant E as EngagementEventService
+    participant O as Orchestrator
+    participant U as UpsellAgent
+    participant D as Decision Store
+    UI->>API: PRODUCT_VIEWED + session + SKU + idempotency key
+    API->>E: authenticated customer + event
+    E->>E: resolve active SKU and persist view
+    alt third view of a premium product
+        API->>O: HIGH_PRODUCT_ENGAGEMENT trigger
+        O->>U: normal governed agent invocation
+        U-->>O: OFFER_AVAILABLE or NO_OFFER
+        O->>D: retain actionable decision ownership
+        O-->>API: typed UpsellResult
+    end
+    API-->>UI: event count, trigger, trace, optional result
+    UI->>API: explicit ACCEPTED / DECLINED / DISMISSED
+    API->>D: validate customer, session, decision, idempotency
+    API->>U: record_upsell_event tool call
+    API-->>UI: interest/decline/dismissal recorded
+```
+
+The engagement endpoint does not trust the browser to classify products or
+customers. `OFFER_ACCEPTED` represents interest only and cannot create a
+subscription, start a trial, or execute a payment. Both endpoint idempotency
+records and decision ownership are process-local in this demo and must move to
+a shared durable store before multi-worker deployment.
+
 ## 6. FastMCP tool design
 
 ### Registration and contracts
@@ -398,17 +472,17 @@ The registry supports:
 
 Agents receive a server containing only their allowlisted tools. A disallowed
 tool is absent during discovery and also rejected by direct registry lookup.
-The implemented ProfileAgent, DiscoveryAgent, and FitAgent additionally verify
-that runtime discovery returns their required tool scopes before continuing.
+Each implemented agent verifies that runtime discovery contains its required
+tool capabilities before continuing.
 
 | Agent scope | Capability groups in the current registry |
 | --- | --- |
 | Profiling | Aggregate profile, purchase, return, loyalty, and engagement summaries |
 | Discovery | `search_products`, `get_product_details`, `check_inventory`, and `semantic_product_search` |
 | Fit | Exactly `get_product_details`, `fit_get_profile`, `fit_build_evidence`, and `fit_retrieve_similar_cases` |
-| Upsell | Customer and loyalty facts, return summary, product facts, engagement, eligibility, suppression, and decision recording |
+| Upsell | Aggregate customer, loyalty, and engagement facts; optional product facts; deterministic `evaluate_upsell`; governed `record_upsell_event`; legacy compatibility contracts |
 
-Profiling, Discovery, and Fit have implemented agent workflows today.
+Profiling, Discovery, Fit, and Upsell have implemented agent workflows today.
 
 ### Tool runtime
 
@@ -587,6 +661,10 @@ the configured fallback.
 - `fit_agent`, `fit_tool_discovery`, and one trace per Fit MCP invocation;
 - `build_fit_embedding_index` and `vector_fit_search` when applicable;
 - `calculate_fit_risk`, `apply_fit_policy`, and optional `fit_explanation`;
+- `upsell_agent` and `upsell_tool_discovery`;
+- `check_subscription`, `check_recent_decline`, and `check_frequency_limit`;
+- `calculate_opportunity_score`, `select_offer`, and `generate_upsell_message`;
+- `evaluate_upsell` and `record_upsell_event` FastMCP traces;
 - one tool trace per FastMCP invocation;
 - `llm_gateway.invoke`: governed logical model call;
 - `litellm.acompletion`: one trace per physical provider attempt.
@@ -606,6 +684,9 @@ safe to disable for local tests.
 | Missing/mismatched profile tool scope | Graph stops with a discovery error; API returns `503` |
 | Missing/mismatched Discovery tool scope | Orchestrator records a dependency/execution error and does not fabricate recommendations |
 | Missing/mismatched Fit tool scope | Orchestrator records a dependency/execution error and does not fabricate size guidance |
+| Missing Upsell context or policy capability | Upsell fails closed and does not call the model or create an offer |
+| Upsell suppression or ineligibility | Structured `NO_OFFER` with machine-readable reasons; no model call |
+| Upsell wording provider unavailable | Deterministic `OFFER_AVAILABLE` remains valid with `message=null` |
 | Discovery explanation unavailable | Ranked products are returned with `explanation=null` |
 | Fit vector retrieval unavailable | Deterministic exact/brand/category evidence still produces the decision |
 | Fit explanation unavailable | Structured sizing and risk are returned with `explanation=null` |
@@ -627,7 +708,8 @@ Uvicorn process
   ├── one lifespan-owned NeuTailOrchestrator
   │   ├── LangGraph control-plane workflow
   │   ├── in-memory SessionContextService
-  │   └── agent registry and shared LLMGateway
+│   ├── in-memory upsell decision/idempotency store
+│   └── agent registry and shared LLMGateway
   ├── one lifespan-owned ProfileAgent
   │   └── in-memory (session_id, customer_id) cache
   ├── one registered DiscoveryAgent
@@ -707,9 +789,8 @@ The design is intentionally single-process. Before production use:
    verification, audience/issuer policy, rotation, and customer authorization.
 2. Move session lifecycle and revocation state into a shared store before
    running multiple API workers.
-3. Implement the Upsell workflow against its scoped FastMCP server; consume
-   Discovery and Fit signals without moving specialist decisions into either
-   upstream agent.
+3. Persist subscription entitlements and offer/session audit metadata in
+   dedicated production tables rather than the PoC service-engagement shape.
 4. Move SQLite to a managed relational database and provide repository
    implementations for the remaining service areas.
 5. Replace process-local profile cache and upsell state with a TTL-based shared
@@ -748,6 +829,12 @@ The current automated suite covers:
 - the authenticated chat API's structured `fit_result` contract;
 - LLM route/prompt resolution, direct LiteLLM wiring, structured output,
   retries, fallback, telemetry, and sanitized tracing behavior.
+- governed Upsell eligibility, consent, subscription, decline cooldown,
+  frequency limits, trigger thresholds, segment policy, scoring, selection,
+  LLM-only wording, event recording, fail-closed behavior, and static agent
+  boundaries;
+- Discovery and Fit signal handoff to Upsell through the orchestrator, with no
+  direct specialist-to-specialist invocation.
 
 Run it with:
 

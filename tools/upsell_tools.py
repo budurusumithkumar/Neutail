@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Optional
+from uuid import uuid4
 
 from models.dto import (
     BehaviorEvent,
@@ -14,10 +15,62 @@ from models.dto import (
     UpsellDecision,
     UpsellEvaluationInput,
 )
+from models.upsell import (
+    UpsellEligibilityResult,
+    UpsellEvaluationRequest,
+    UpsellEventInput,
+)
 from services.engagement_service import EngagementService
 from services.upsell_policy_service import UpsellPolicyService
 from tools.contracts import ToolAcknowledgement, tool_contract
 from tools.runtime import get_runtime
+
+
+@tool_contract(
+    name="evaluate_upsell",
+    title="Evaluate Governed Service Offer",
+    description=(
+        "Apply deterministic customer context, consent, subscription, decline, "
+        "frequency, trigger, and service-eligibility policy."
+    ),
+    capability="upsell.policy.governed-evaluation",
+)
+def evaluate_upsell(
+    request: UpsellEvaluationRequest,
+) -> UpsellEligibilityResult:
+    runtime = get_runtime()
+    with runtime.session() as session:
+        return UpsellPolicyService(
+            session, state=runtime.upsell_policy_state
+        ).evaluate_upsell(request)
+
+
+@tool_contract(
+    name="record_upsell_event",
+    title="Record Upsell Event",
+    description=(
+        "Persist an explicit offer lifecycle event; generating an offer records "
+        "OFFER_SHOWN only and never implies acceptance."
+    ),
+    capability="upsell.engagement.governed-record",
+    read_only=False,
+    idempotent=False,
+)
+def record_upsell_event(event: UpsellEventInput) -> ToolAcknowledgement:
+    if not isinstance(event, UpsellEventInput):
+        event = UpsellEventInput.model_validate(event)
+    service_event = ServiceEngagement(
+        engagement_id=f"UPSELL-{uuid4().hex}",
+        customer_id=event.customer_id,
+        event_datetime=event.timestamp,
+        service_type=event.offer_type.value,
+        outcome=event.event_type,
+        channel="UPSELL_AGENT",
+        offer_suppressed=False,
+    )
+    with get_runtime().session(write=True) as session:
+        EngagementService(session).record_service_event(service_event)
+    return ToolAcknowledgement(success=True, message=f"{event.event_type} recorded")
 
 
 @tool_contract(
@@ -136,6 +189,8 @@ def upsell_record_decision(decision: UpsellDecision) -> ToolAcknowledgement:
 
 
 UPSELL_TOOLS = (
+    evaluate_upsell,
+    record_upsell_event,
     upsell_get_recent_behavior,
     upsell_get_behavior_summary,
     upsell_get_service_engagement,

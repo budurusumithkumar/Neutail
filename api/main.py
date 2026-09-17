@@ -22,6 +22,7 @@ from agents.profiling import (
 from api.auth import get_authenticated_customer_id, router as auth_router
 from api.customers import router as customers_router
 from api.sessions import router as sessions_router
+from api.upsell import UpsellAwareChatResponse, router as upsell_router
 from models.dto import CustomerContext
 from llm_gateway import LLMGateway
 from orchestrator import (
@@ -118,6 +119,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(customers_router)
 app.include_router(sessions_router)
+app.include_router(upsell_router)
 
 
 @app.middleware("http")
@@ -276,16 +278,17 @@ async def list_profile_tools() -> list[ToolDescriptor]:
 
 @app.post(
     "/api/v1/chat",
-    response_model=OrchestratorResponse,
+    response_model=UpsellAwareChatResponse,
     summary="Handle one orchestrated customer turn",
     tags=["chat"],
+    operation_id="chatWithUpsellResult",
 )
 async def chat(
     payload: ChatRequest,
     request: Request,
     orchestrator: OrchestratorDependency,
     customer_id: Annotated[str, Depends(get_authenticated_customer_id)],
-) -> OrchestratorResponse:
+) -> UpsellAwareChatResponse:
     return await orchestrator.handle(
         OrchestratorRequest(
             customer_id=customer_id,

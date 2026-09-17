@@ -30,7 +30,7 @@ def _utc_now() -> datetime:
 class ChatRequest(DTOModel):
     """UI-facing chat body; customer identity comes from the API boundary."""
 
-    message: str = Field(min_length=1, max_length=2_000)
+    message: str = Field(min_length=1, max_length=4_000)
     session_id: str = Field(min_length=1, max_length=128)
     selected_sku: Optional[str] = Field(default=None, min_length=1, max_length=128)
 
@@ -40,7 +40,7 @@ class OrchestratorRequest(DTOModel):
 
     customer_id: str = Field(min_length=1, max_length=128)
     session_id: str = Field(min_length=1, max_length=128)
-    message: str = Field(min_length=1, max_length=2_000)
+    message: str = Field(min_length=1, max_length=4_000)
     trace_id: str = Field(min_length=1, max_length=128)
     selected_sku: Optional[str] = Field(default=None, min_length=1, max_length=128)
 
@@ -146,6 +146,7 @@ class NeuTailState(TypedDict, total=False):
     customer_context: CustomerContext
     discovery_result: dict[str, Any]
     fit_result: dict[str, Any]
+    upsell_trigger: dict[str, Any]
     upsell_result: dict[str, Any]
     agent_outputs: dict[str, Any]
     completed_agents: list[AgentName]

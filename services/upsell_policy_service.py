@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from threading import RLock
 from typing import Any, Optional
 
+from langsmith import trace
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,12 @@ from models.entities import Order as OrderEntity
 from models.entities import OrderItem as OrderItemEntity
 from models.entities import Return as ReturnEntity
 from models.entities import ServiceEngagement as ServiceEngagementEntity
+from models.upsell import (
+    ServiceOfferType,
+    UpsellEligibilityResult,
+    UpsellEvaluationRequest,
+    UpsellTriggerType,
+)
 from services._date_utils import sqlite_datetime, utc_now
 
 
@@ -34,6 +41,23 @@ class UpsellCustomerNotFoundError(LookupError):
     def __init__(self, customer_id: str) -> None:
         self.customer_id = customer_id
         super().__init__(f"Customer '{customer_id}' was not found")
+
+
+@dataclass(frozen=True)
+class UpsellPolicyConfig:
+    """Central thresholds for governed service-offer eligibility."""
+
+    max_service_offers_30d: int = 3
+    service_offer_window_days: int = 30
+    explicit_suppression_days: int = 30
+    style_plus_decline_cooldown_days: int = 30
+    high_engagement_threshold: float = 0.70
+    chronic_fit_risk_threshold: float = 0.50
+    cart_abandonment_threshold: float = 0.70
+    loyalty_threshold_tiers: frozenset[str] = frozenset({"gold", "platinum"})
+
+
+DEFAULT_UPSELL_POLICY = UpsellPolicyConfig()
 
 
 @dataclass
@@ -62,10 +86,314 @@ class UpsellPolicyService:
         *,
         clock: Optional[Callable[[], datetime]] = None,
         state: Optional[UpsellPolicyState] = None,
+        config: UpsellPolicyConfig = DEFAULT_UPSELL_POLICY,
     ) -> None:
         self._session = session
         self._clock = clock or utc_now
         self._state = state or UpsellPolicyState()
+        self._config = config
+
+    def evaluate_eligibility(
+        self,
+        request: UpsellEvaluationRequest,
+    ) -> UpsellEligibilityResult:
+        """Apply ordered, deterministic policy before scoring or wording."""
+
+        if not isinstance(request, UpsellEvaluationRequest):
+            request = UpsellEvaluationRequest.model_validate(request)
+        customer_id = self._normalize_identifier(request.customer_id, "customer_id")
+        customer = self._session.get(Customer, customer_id)
+        if customer is None:
+            raise UpsellCustomerNotFoundError(customer_id)
+
+        normalized_segment = self._normalized_segment(request.segment)
+        stored_segment = self._normalized_segment(customer.segment or "")
+        supported_segments = {
+            "prestige champion",
+            "value defender",
+            "aspiring loyalist",
+            "price explorer",
+        }
+        if (
+            normalized_segment not in supported_segments
+            or normalized_segment != stored_segment
+            or customer.premium_affinity is None
+            or customer.price_sensitivity is None
+            or customer.marketing_consent is None
+        ):
+            return self._no_offer("CUSTOMER_CONTEXT_INCOMPLETE")
+
+        now = self._clock()
+        subscription_suppressed = self._has_active_style_plus(customer_id)
+        inherited_suppressions = (
+            ["ALREADY_STYLE_PLUS_MEMBER"] if subscription_suppressed else []
+        )
+
+        if not bool(customer.marketing_consent):
+            return self._no_offer("CUSTOMER_CONSENT_REQUIRED")
+
+        if self._has_explicit_suppression(customer_id, now):
+            return self._no_offer("SERVICE_NOT_AVAILABLE")
+
+        last_decline_at = self._last_style_plus_decline(customer_id, now)
+        if last_decline_at is not None:
+            return self._no_offer(
+                "RECENT_STYLE_PLUS_DECLINE",
+                cooldown_until=last_decline_at
+                + timedelta(days=self._config.style_plus_decline_cooldown_days),
+            )
+
+        frequency_reset = self._frequency_reset_at(customer_id, now)
+        if frequency_reset is not None:
+            return self._no_offer(
+                "SERVICE_FREQUENCY_LIMIT", cooldown_until=frequency_reset
+            )
+
+        try:
+            trigger_type = UpsellTriggerType(request.trigger_type)
+        except ValueError:
+            return self._no_offer("INVALID_TRIGGER")
+
+        loyalty = self._session.get(Loyalty, customer_id)
+        trigger_reason = self._validate_trigger(
+            trigger_type=trigger_type,
+            strength=request.trigger_strength,
+            loyalty_tier=loyalty.tier if loyalty else None,
+        )
+        if trigger_reason is not None:
+            return self._no_offer(trigger_reason)
+
+        eligible_offers = self._eligible_offers(
+            trigger_type=trigger_type,
+            segment=normalized_segment,
+        )
+        if subscription_suppressed:
+            eligible_offers = [
+                offer
+                for offer in eligible_offers
+                if offer
+                not in {
+                    ServiceOfferType.STYLE_PLUS_TRIAL,
+                    ServiceOfferType.STYLE_PLUS,
+                }
+            ]
+        if not eligible_offers:
+            return UpsellEligibilityResult(
+                eligible=False,
+                eligible_offers=[],
+                suppression_reasons=[
+                    *inherited_suppressions,
+                    "SERVICE_NOT_AVAILABLE",
+                ],
+                eligibility_reasons=[],
+            )
+
+        reasons = [trigger_type.value]
+        if normalized_segment == "prestige champion":
+            reasons.append("PRESTIGE_CHAMPION")
+        elif normalized_segment == "aspiring loyalist":
+            reasons.append("ASPIRING_LOYALIST")
+        if ServiceOfferType.STYLE_PLUS_TRIAL in eligible_offers:
+            reasons.append("STYLE_PLUS_ELIGIBLE")
+        return UpsellEligibilityResult(
+            eligible=True,
+            eligible_offers=eligible_offers,
+            suppression_reasons=inherited_suppressions,
+            eligibility_reasons=reasons,
+        )
+
+    def evaluate_upsell(
+        self, request: UpsellEvaluationRequest
+    ) -> UpsellEligibilityResult:
+        """Named policy entry point matching the public FastMCP capability."""
+
+        return self.evaluate_eligibility(request)
+
+    def _has_active_style_plus(self, customer_id: str) -> bool:
+        with trace(
+            name="check_subscription",
+            run_type="chain",
+            inputs={"customer_id": customer_id},
+            tags=["upsell-policy", "deterministic"],
+        ) as run:
+            statement = select(ServiceEngagementEntity.engagement_id).where(
+                ServiceEngagementEntity.customer_id == customer_id,
+                ServiceEngagementEntity.service_type
+                == ServiceOfferType.STYLE_PLUS.value,
+                ServiceEngagementEntity.outcome.in_(
+                    {"ACCEPTED", "COMPLETED", "OFFER_ACCEPTED"}
+                ),
+            ).limit(1)
+            active = self._session.scalar(statement) is not None
+            run.end(outputs={"active": active})
+            return active
+
+    def _has_explicit_suppression(
+        self, customer_id: str, now: datetime
+    ) -> bool:
+        cutoff = now - timedelta(days=self._config.explicit_suppression_days)
+        statement = select(ServiceEngagementEntity.engagement_id).where(
+            ServiceEngagementEntity.customer_id == customer_id,
+            ServiceEngagementEntity.offer_suppressed.is_(True),
+            func.datetime(ServiceEngagementEntity.event_datetime)
+            >= sqlite_datetime(cutoff),
+            func.datetime(ServiceEngagementEntity.event_datetime)
+            <= sqlite_datetime(now),
+        ).limit(1)
+        return self._session.scalar(statement) is not None
+
+    def _last_style_plus_decline(
+        self, customer_id: str, now: datetime
+    ) -> Optional[datetime]:
+        with trace(
+            name="check_recent_decline",
+            run_type="chain",
+            inputs={"customer_id": customer_id},
+            tags=["upsell-policy", "deterministic"],
+        ) as run:
+            cutoff = now - timedelta(
+                days=self._config.style_plus_decline_cooldown_days
+            )
+            statement = (
+                select(ServiceEngagementEntity.event_datetime)
+                .where(
+                    ServiceEngagementEntity.customer_id == customer_id,
+                    ServiceEngagementEntity.service_type.in_(
+                        {
+                            ServiceOfferType.STYLE_PLUS.value,
+                            ServiceOfferType.STYLE_PLUS_TRIAL.value,
+                        }
+                    ),
+                    ServiceEngagementEntity.outcome.in_(
+                        {"DECLINED", "OFFER_DECLINED"}
+                    ),
+                    func.datetime(ServiceEngagementEntity.event_datetime)
+                    >= sqlite_datetime(cutoff),
+                    func.datetime(ServiceEngagementEntity.event_datetime)
+                    <= sqlite_datetime(now),
+                )
+                .order_by(ServiceEngagementEntity.event_datetime.desc())
+                .limit(1)
+            )
+            declined_at = self._session.scalar(statement)
+            run.end(outputs={"recent_decline": declined_at is not None})
+            return declined_at
+
+    def _frequency_reset_at(
+        self, customer_id: str, now: datetime
+    ) -> Optional[datetime]:
+        with trace(
+            name="check_frequency_limit",
+            run_type="chain",
+            inputs={"customer_id": customer_id},
+            tags=["upsell-policy", "deterministic"],
+        ) as run:
+            cutoff = now - timedelta(days=self._config.service_offer_window_days)
+            statement = select(
+                func.count(ServiceEngagementEntity.engagement_id),
+                func.min(ServiceEngagementEntity.event_datetime),
+            ).where(
+                ServiceEngagementEntity.customer_id == customer_id,
+                ServiceEngagementEntity.outcome.in_(
+                    {
+                        "VIEWED",
+                        "ACCEPTED",
+                        "COMPLETED",
+                        "DECLINED",
+                        "DISMISSED",
+                        "OFFER_SHOWN",
+                        "OFFER_ACCEPTED",
+                        "OFFER_DECLINED",
+                        "OFFER_DISMISSED",
+                    }
+                ),
+                func.datetime(ServiceEngagementEntity.event_datetime)
+                >= sqlite_datetime(cutoff),
+                func.datetime(ServiceEngagementEntity.event_datetime)
+                <= sqlite_datetime(now),
+            )
+            count, first_at = self._session.execute(statement).one()
+            limited = int(count or 0) >= self._config.max_service_offers_30d
+            run.end(outputs={"offer_count": int(count or 0), "limited": limited})
+            if limited and first_at is not None:
+                return first_at + timedelta(
+                    days=self._config.service_offer_window_days
+                )
+            return None
+
+    def _validate_trigger(
+        self,
+        *,
+        trigger_type: UpsellTriggerType,
+        strength: Optional[float],
+        loyalty_tier: Optional[str],
+    ) -> Optional[str]:
+        threshold = {
+            UpsellTriggerType.HIGH_PRODUCT_ENGAGEMENT: (
+                self._config.high_engagement_threshold
+            ),
+            UpsellTriggerType.PREMIUM_PRODUCT_INTEREST: (
+                self._config.high_engagement_threshold
+            ),
+            UpsellTriggerType.CART_ABANDONMENT: self._config.cart_abandonment_threshold,
+            UpsellTriggerType.CHRONIC_FIT_RISK: self._config.chronic_fit_risk_threshold,
+            UpsellTriggerType.STYLING_ENGAGEMENT: (
+                self._config.high_engagement_threshold
+            ),
+        }.get(trigger_type)
+        if threshold is not None and (strength is None or strength < threshold):
+            return "INSUFFICIENT_ENGAGEMENT"
+        if trigger_type is UpsellTriggerType.LOYALTY_THRESHOLD_REACHED:
+            if (
+                loyalty_tier or ""
+            ).casefold() not in self._config.loyalty_threshold_tiers:
+                return "SERVICE_NOT_AVAILABLE"
+        return None
+
+    @staticmethod
+    def _eligible_offers(
+        *, trigger_type: UpsellTriggerType, segment: str
+    ) -> list[ServiceOfferType]:
+        value_segments = {"value defender", "price explorer"}
+        premium_segments = {"prestige champion", "aspiring loyalist"}
+        if trigger_type is UpsellTriggerType.CHRONIC_FIT_RISK:
+            return [ServiceOfferType.STYLING_ADVISORY]
+        if trigger_type is UpsellTriggerType.CART_ABANDONMENT:
+            return [ServiceOfferType.STYLING_ADVISORY]
+        if segment in value_segments:
+            return [ServiceOfferType.STYLING_ADVISORY]
+        if trigger_type is UpsellTriggerType.STYLING_ENGAGEMENT:
+            return [
+                ServiceOfferType.STYLING_ADVISORY,
+                ServiceOfferType.STYLE_PLUS,
+            ]
+        if trigger_type is UpsellTriggerType.LOYALTY_THRESHOLD_REACHED:
+            return [
+                ServiceOfferType.STYLING_ADVISORY,
+                ServiceOfferType.STYLE_PLUS_TRIAL,
+            ]
+        if segment in premium_segments:
+            return [
+                ServiceOfferType.STYLING_ADVISORY,
+                ServiceOfferType.STYLE_PLUS_TRIAL,
+            ]
+        return []
+
+    @staticmethod
+    def _no_offer(
+        reason: str, *, cooldown_until: Optional[datetime] = None
+    ) -> UpsellEligibilityResult:
+        return UpsellEligibilityResult(
+            eligible=False,
+            eligible_offers=[],
+            suppression_reasons=[reason],
+            eligibility_reasons=[],
+            cooldown_until=cooldown_until,
+        )
+
+    @staticmethod
+    def _normalized_segment(value: str) -> str:
+        return " ".join(value.replace("_", " ").casefold().split())
 
     def evaluate(
         self,
@@ -431,7 +759,9 @@ class UpsellPolicyService:
 
 
 __all__ = [
+    "DEFAULT_UPSELL_POLICY",
     "UpsellCustomerNotFoundError",
+    "UpsellPolicyConfig",
     "UpsellPolicyService",
     "UpsellPolicyState",
 ]

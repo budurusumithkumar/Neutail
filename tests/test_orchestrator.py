@@ -131,9 +131,32 @@ def test_compound_request_builds_ordered_deterministic_plan():
     assert result.completed_agents == [
         AgentName.PROFILING,
         AgentName.DISCOVERY,
+        AgentName.UPSELL,
     ]
     assert result.discovery_result is not None
     assert result.discovery_result["status"] in {"SUCCESS", "NO_RESULTS"}
+
+
+def test_service_query_runs_governed_upsell_end_to_end():
+    async def scenario():
+        return await NeuTailOrchestrator().handle(
+            _request(
+                "Can I get styling support?",
+                session_id="service-query-session",
+            )
+        )
+
+    result = asyncio.run(scenario())
+
+    assert result.intent == "SERVICE_QUERY"
+    assert result.execution_plan == [AgentName.PROFILING, AgentName.UPSELL]
+    assert result.completed_agents == result.execution_plan
+    assert result.upsell_result is not None
+    assert result.upsell_result["status"] == "NO_OFFER"
+    assert result.upsell_result["suppression_reasons"] == [
+        "INSUFFICIENT_ENGAGEMENT"
+    ]
+    assert result.errors == []
 
 
 def test_birthday_budget_request_does_not_run_fit_without_selected_product():
@@ -261,7 +284,7 @@ def test_unknown_customer_and_cross_customer_session_are_rejected():
     asyncio.run(scenario())
 
 
-def test_agent_registry_reports_profile_discovery_and_fit_as_implemented():
+def test_agent_registry_reports_all_specialists_as_implemented():
     descriptors = NeuTailOrchestrator().agent_registry.list_agents()
     implemented = {item.name for item in descriptors if item.implemented}
 
@@ -269,6 +292,7 @@ def test_agent_registry_reports_profile_discovery_and_fit_as_implemented():
         AgentName.PROFILING,
         AgentName.DISCOVERY,
         AgentName.FIT,
+        AgentName.UPSELL,
     }
     assert {item.name for item in descriptors} == set(AgentName)
 

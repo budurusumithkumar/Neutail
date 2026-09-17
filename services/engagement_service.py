@@ -173,6 +173,39 @@ class EngagementService:
         self._session.flush()
         return ServiceEngagement.model_validate(entity)
 
+    def record_behavior_event(self, event: BehaviorEvent) -> BehaviorEvent:
+        """Stage and flush one trusted UI behavior event."""
+
+        if not isinstance(event, BehaviorEvent):
+            event = BehaviorEvent.model_validate(event)
+        entity = ClickstreamEvent(**event.model_dump())
+        self._session.add(entity)
+        self._session.flush()
+        return BehaviorEvent.model_validate(entity)
+
+    def count_product_views(
+        self,
+        customer_id: str,
+        session_id: str,
+        sku: str,
+    ) -> int:
+        """Count recorded views for one customer/session/SKU combination."""
+
+        normalized_customer_id = self._normalize_identifier(
+            customer_id, "customer_id"
+        )
+        normalized_session_id = self._normalize_identifier(
+            session_id, "session_id"
+        )
+        normalized_sku = self._normalize_identifier(sku, "sku")
+        statement = select(func.count(ClickstreamEvent.event_id)).where(
+            ClickstreamEvent.customer_id == normalized_customer_id,
+            ClickstreamEvent.session_id == normalized_session_id,
+            ClickstreamEvent.sku == normalized_sku,
+            ClickstreamEvent.event_type == "VIEW_PRODUCT",
+        )
+        return int(self._session.scalar(statement) or 0)
+
     @staticmethod
     def _normalize_identifier(value: Any, field_name: str) -> str:
         if isinstance(value, str) and value.strip():

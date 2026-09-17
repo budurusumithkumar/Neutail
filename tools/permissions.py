@@ -82,6 +82,8 @@ FIT_AGENT_TOOLS = frozenset(
 )
 UPSELL_TOOLS = frozenset(
     {
+        "evaluate_upsell",
+        "record_upsell_event",
         "upsell_get_recent_behavior",
         "upsell_get_behavior_summary",
         "upsell_get_service_engagement",
@@ -92,6 +94,16 @@ UPSELL_TOOLS = frozenset(
         "upsell_record_decision",
     }
 )
+UPSELL_AGENT_REQUIRED_TOOLS = frozenset(
+    {
+        "get_customer_profile",
+        "get_loyalty_profile",
+        "get_engagement_summary",
+        "evaluate_upsell",
+        "record_upsell_event",
+    }
+)
+UPSELL_AGENT_OPTIONAL_TOOLS = frozenset({"get_product_details"})
 
 
 AGENT_TOOL_ALLOWLIST: dict[AgentName, frozenset[str]] = {
@@ -101,6 +113,8 @@ AGENT_TOOL_ALLOWLIST: dict[AgentName, frozenset[str]] = {
     AgentName.UPSELL: (
         CUSTOMER_PROFILE_TOOLS
         | LOYALTY_TOOLS
+        | UPSELL_AGENT_REQUIRED_TOOLS
+        | UPSELL_AGENT_OPTIONAL_TOOLS
         | frozenset({"customer_get_return_summary", "product_get"})
         | UPSELL_TOOLS
     ),
@@ -168,6 +182,9 @@ __all__ = [
     "DISCOVERY_AGENT_TOOLS",
     "FIT_AGENT_TOOLS",
     "PROFILE_AGENT_TOOLS",
+    "UPSELL_AGENT_OPTIONAL_TOOLS",
+    "UPSELL_AGENT_REQUIRED_TOOLS",
+    "UPSELL_TOOLS",
     "ToolPermissionError",
     "allowed_agents",
     "allowed_tools",

@@ -1,23 +1,25 @@
-# Neu.Tail Mission 4 — Orchestrator, Profile, Discovery, and Fit Agents
+# Neu.Tail Mission 4 — Governed Retail Agent System
 
 See [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md) for the as-built component design,
 runtime flows, tool permissions, persistence model, observability, and known
 demo limitations.
 
-This slice implements the deterministic Profiling, Discovery, and Size & Fit
-Agents. Profile builds and caches `CustomerContext`; Discovery consumes that
+This slice implements Profiling, Discovery, Size & Fit, and governed Service
+Upsell Agents. Profile builds and caches `CustomerContext`; Discovery consumes that
 context, uses an exact four-tool FastMCP scope, supports structured, semantic,
 similar-item, and hybrid retrieval, filters live inventory and hard constraints,
 then applies explainable segment-aware ranking. Fit combines exact product,
 brand, category, return, exchange, inventory, and vector-retrieved outcome
-evidence to produce deterministic size guidance and fit-risk signals.
+evidence to produce deterministic size guidance and fit-risk signals. Upsell
+consumes orchestrator-owned Discovery/Fit signals, applies deterministic
+eligibility and suppression policy, scores only eligible opportunities, and
+uses the LLM Gateway only to word an already-selected optional offer.
 
 The LangGraph orchestrator adds identity validation, multi-turn session state,
 hybrid intent detection, runtime capability discovery, deterministic agent
 planning, structured invocation, response synthesis, and trace propagation.
-Profile, Discovery, and Fit requests execute end to end. Upsell remains
-separate and is reported as unavailable instead of having its decisions
-duplicated in Discovery, Fit, or the orchestrator.
+All four specialists execute end to end. Discovery and Fit never invoke Upsell
+directly: they publish typed signals and the orchestrator owns the handoff.
 
 ## Run
 
@@ -142,6 +144,57 @@ recommended sizes, confidence, risk score/band, action, reason codes, evidence
 counts, and downstream risk signals. The recommendation is calculated in code;
 an LLM can only verbalize that fixed result.
 
+Ask for service support through the same route:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/chat" \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer ${NEUTAIL_DEMO_TOKEN}" \
+  -d '{"session_id":"demo-session","message":"Can I get styling support?"}'
+```
+
+The response includes `upsell_result`. With no qualifying evidence it is a
+deterministic `NO_OFFER` and makes no model call. A qualifying
+`HIGH_PRODUCT_ENGAGEMENT` or `CHRONIC_FIT_RISK` specialist signal is routed by
+the orchestrator to the Upsell Agent. The agent calls `evaluate_upsell` through
+its FastMCP scope, then—only for an eligible result—selects an offer, invokes
+the `upsell_message/v1` gateway prompt, and records `OFFER_SHOWN`. It never
+records acceptance without an explicit customer action.
+
+### UI-driven engagement and offer response
+
+The UI can submit product views to `POST /api/v1/engagement/events`. Customer
+identity comes from the bearer token; the backend resolves the SKU and decides
+whether it is a premium product. For the seeded demo, `SKU00006` is premium.
+Submit the same request three times with a new idempotency key each time:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/engagement/events" \
+  -H "authorization: Bearer ${NEUTAIL_DEMO_TOKEN}" \
+  -H "content-type: application/json" \
+  -d "{\"session_id\":\"demo-session\",\"event_type\":\"PRODUCT_VIEWED\",\"sku\":\"SKU00006\",\"idempotency_key\":\"demo-session-SKU00006-view-1\",\"metadata\":{\"source\":\"PRODUCT_DETAIL\"}}"
+```
+
+Change the final `view-1` suffix to `view-2` and `view-3` for the next two
+calls. The third view returns a `HIGH_PRODUCT_ENGAGEMENT` trigger and a governed
+`upsell_result` when the customer is eligible. Keep its `decision_id` in UI
+state.
+
+Only an explicit UI action may resolve that decision:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/upsell/decisions/UPSELL_ID/events" \
+  -H "authorization: Bearer ${NEUTAIL_DEMO_TOKEN}" \
+  -H "content-type: application/json" \
+  -d '{"session_id":"demo-session","event_type":"OFFER_ACCEPTED","idempotency_key":"UPSELL_ID-OFFER_ACCEPTED"}'
+```
+
+Replace `UPSELL_ID` with the returned decision identifier. Acceptance records
+interest only; it never starts a trial, creates a subscription, or charges the
+customer. `OFFER_DECLINED` and `OFFER_DISMISSED` are also supported. Replaying
+the same request with the same idempotency key returns the original response;
+reusing a key for a different payload returns `409`.
+
 ## LangSmith
 
 Export the values shown in `.env.example` before starting Uvicorn. LangGraph
@@ -198,6 +251,11 @@ intact.
 Fit sizing and risk calculation also never use an LLM. Set
 `NEUTAIL_FIT_EXPLANATIONS_LLM=true` only to verbalize the completed decision;
 provider failure leaves the structured Fit result intact.
+
+Upsell eligibility, suppression, opportunity scoring, and offer selection are
+always deterministic. The `upsell_message` route can only word the immutable
+selected offer. A provider failure preserves `OFFER_AVAILABLE` with
+`message=null`; `NO_OFFER` never invokes the gateway.
 
 ## Verify
 
