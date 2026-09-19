@@ -136,6 +136,11 @@ class FailingGateway:
         raise LLMGatewayError("explanation provider unavailable")
 
 
+class UnexpectedGateway:
+    async def invoke(self, **_kwargs: Any) -> Any:
+        raise AssertionError("The LLM must not be invoked for this request")
+
+
 class ControlledExplanationGateway:
     async def invoke(self, **_kwargs: Any) -> DiscoveryExplanations:
         return DiscoveryExplanations(
@@ -231,6 +236,24 @@ def test_llm_failure_keeps_ranked_products_without_explanation():
 
     assert result.status == "SUCCESS"
     assert result.recommendations[0].sku == "SAFE-FALLBACK"
+    assert result.recommendations[0].explanation is None
+
+
+def test_caller_can_disable_llm_explanations_for_homepage_latency():
+    tools = FakeDiscoveryTools([_product("HOME-NO-LLM")])
+    agent = DiscoveryAgent(
+        tool_client=tools,
+        llm_gateway=UnexpectedGateway(),  # type: ignore[arg-type]
+        explanations_enabled=True,
+    )
+    request = _request().model_copy(
+        update={"allow_llm_explanations": False}
+    )
+
+    result = asyncio.run(agent.execute(request))
+
+    assert result.status == "SUCCESS"
+    assert result.recommendations[0].sku == "HOME-NO-LLM"
     assert result.recommendations[0].explanation is None
 
 

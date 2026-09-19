@@ -4,6 +4,12 @@ See [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md) for the as-built component design,
 runtime flows, tool permissions, persistence model, observability, and known
 demo limitations.
 
+See
+[MISSION4_SEQUENCE_IMPLEMENTATION_DESIGN.md](MISSION4_SEQUENCE_IMPLEMENTATION_DESIGN.md)
+for the proposed high-level and low-level changes needed to support the three
+customer profiling, discovery/Upsell, and post-delivery Fit sequences with
+NeutailUI.
+
 This slice implements Profiling, Discovery, Size & Fit, and governed Service
 Upsell Agents. Profile builds and caches `CustomerContext`; Discovery consumes that
 context, uses an exact four-tool FastMCP scope, supports structured, semantic,
@@ -85,6 +91,18 @@ The UI header/profile panel can load its compact customer record with:
 curl "http://127.0.0.1:8000/api/v1/customers/me/summary" \
   -H "authorization: Bearer ${NEUTAIL_DEMO_TOKEN}"
 ```
+
+The Home screen loads authenticated, in-stock recommendations from the
+customer's strongest purchase/category affinities and profile preferences:
+
+```bash
+curl "http://127.0.0.1:8000/api/v1/recommendations/home?limit=8" \
+  -H "authorization: Bearer ${NEUTAIL_DEMO_TOKEN}"
+```
+
+This typed route invokes Profiling and Discovery directly through the
+orchestrator without chat intent classification. Discovery retains ownership
+of deterministic personalization, hard constraints, and inventory filtering.
 
 Create a UI session before sending chat messages. The request body is optional;
 its `channel` can be `web`, `mobile`, or `demo` and defaults to `web`:

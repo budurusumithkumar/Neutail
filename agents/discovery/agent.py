@@ -33,6 +33,7 @@ from models.dto import (
     SemanticProductMatch,
     SemanticProductSearchInput,
 )
+from services.product_image_service import get_product_image_url
 from tools.permissions import AgentName, DISCOVERY_AGENT_TOOLS
 from tools.registry import create_agent_server
 
@@ -499,7 +500,7 @@ class DiscoveryAgent:
         recommendations: list[ProductRecommendation],
         request: DiscoveryRequest,
     ) -> list[ProductRecommendation]:
-        if not self.explanations_enabled:
+        if not self.explanations_enabled or not request.allow_llm_explanations:
             return recommendations
         explanation_candidates = recommendations[:3]
         with trace(
@@ -605,6 +606,7 @@ class DiscoveryAgent:
             product_name=product.product_name or product.sku,
             price_gbp=product.current_price_gbp or 0.0,
             brand=product.brand or "",
+            image_url=get_product_image_url(product.sku),
             score=item.ranking.total_score,
             reason_codes=item.ranking.reason_codes,
             gender=product.gender,

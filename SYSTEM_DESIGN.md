@@ -8,6 +8,8 @@ executable application is a vertical slice for customer profiling, product
 discovery, size-and-fit guidance, and governed service offers:
 
 - FastAPI exposes health, profile construction, and profile-tool discovery.
+- An authenticated Home recommendation route runs typed Profiling and Discovery
+  orchestration without fabricating a chat turn or invoking intent detection.
 - A LangGraph orchestrator validates identity, manages multi-turn state,
   detects intent, discovers capabilities, plans agents, and synthesizes one
   response.
@@ -195,6 +197,7 @@ flowchart TB
 | `GET /api/v1/auth/me` | Signed Bearer JWT | `AuthUser` | Missing, invalid, expired, or revoked token `401` |
 | `POST /api/v1/auth/logout` | Signed Bearer JWT | Empty response | Missing, invalid, expired, or revoked token `401` |
 | `GET /api/v1/customers/me/summary` | Signed Bearer JWT | Compact `CustomerSummary` | Missing/invalid token or deleted customer `401` |
+| `GET /api/v1/recommendations/home` | Signed Bearer JWT and optional `limit` | Category-affinity sections containing available ranked products | Missing/invalid token `401`; dependency failure `503`; invalid limit `422` |
 | `POST /api/v1/sessions` | Signed Bearer JWT and optional channel | `SessionResponse` | Missing/invalid token `401`; invalid input `422` |
 | `GET /api/v1/sessions/{session_id}` | Signed Bearer JWT | `SessionResponse` | Missing/foreign session `404`; missing/invalid token `401` |
 | `DELETE /api/v1/sessions/{session_id}` | Signed Bearer JWT | Empty response | Missing/foreign session `404`; missing/invalid token `401` |

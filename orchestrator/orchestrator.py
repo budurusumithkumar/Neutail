@@ -5,15 +5,23 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from typing import Any, Optional
+from uuid import uuid4
 
 from fastmcp import Client, FastMCP
 from langgraph.graph import END, START, StateGraph
 from langsmith import trace, traceable
 from pydantic import BaseModel
 
+from agents.discovery import DiscoveryResult
 from agents.upsell import UpsellSignalHandler
 from llm_gateway import LLMGateway, LLMGatewayError
 from llm_gateway.models import IntentResult
+from models.dto import CustomerContext
+from models.recommendations import (
+    HomeRecommendationProduct,
+    HomeRecommendationSection,
+    HomeRecommendationsResponse,
+)
 from models.upsell import UpsellResult, UpsellTrigger
 from orchestrator.agent_registry import (
     AgentDependencyError,
@@ -30,6 +38,7 @@ from orchestrator.models import (
     OrchestratorResponse,
     SessionContext,
 )
+from services._date_utils import utc_now
 from services.session_context_service import SessionContextService
 from services.upsell_decision_service import UpsellDecisionService
 from tools.permissions import AgentName
@@ -360,6 +369,201 @@ class NeuTailOrchestrator:
             errors=result.get("errors", []),
             turn_count=session.turn_count,
         )
+
+    @traceable(
+        name="neutail_home_recommendations",
+        run_type="chain",
+        tags=["orchestrator", "homepage-recommendations", "discovery-agent"],
+    )
+    async def handle_home_recommendations(
+        self,
+        *,
+        customer_id: str,
+        trace_id: str,
+        limit: int = 8,
+    ) -> HomeRecommendationsResponse:
+        """Build typed homepage recommendations without chat intent detection."""
+
+        home_session_id = f"home-recommendations-{customer_id}"
+        session = SessionContext(
+            session_id=home_session_id,
+            customer_id=customer_id,
+            attributes={"channel": "web", "surface": "home"},
+        )
+        request = OrchestratorRequest(
+            customer_id=customer_id,
+            session_id=home_session_id,
+            message="Build personalized homepage recommendations",
+            trace_id=trace_id,
+        )
+        tool_catalog = {
+            descriptor.name: self.tool_registry.list_tools(descriptor.name)
+            for descriptor in self.agent_registry.list_agents()
+        }
+        state: NeuTailState = {
+            "request": request,
+            "session": session,
+            "tool_catalog": tool_catalog,
+            "agent_outputs": {},
+            "completed_agents": [],
+            "errors": [],
+        }
+
+        profile_result = await self.agent_registry.invoke(
+            AgentName.PROFILING,
+            state,
+            tool_catalog[AgentName.PROFILING],
+        )
+        if profile_result.status is not AgentRunStatus.SUCCESS:
+            raise OrchestratorDependencyError(
+                "Profiling did not produce homepage recommendation context"
+            )
+        context = profile_result.state_updates.get("customer_context")
+        if not isinstance(context, CustomerContext):
+            raise OrchestratorDependencyError(
+                "Profiling returned invalid homepage recommendation context"
+            )
+
+        affinity_categories = self._unique_values(context.category_affinity)
+        preferred_categories = self._unique_values(
+            context.preferences.preferred_categories
+        )
+        if affinity_categories:
+            categories = affinity_categories[:2]
+            strategy = "CATEGORY_AFFINITY"
+        elif preferred_categories:
+            categories = preferred_categories[:2]
+            strategy = "PROFILE_PREFERENCE"
+        else:
+            categories = []
+            strategy = "PROFILE_PERSONALIZATION"
+
+        section_categories: list[Optional[str]] = categories or [None]
+        per_section_limit = max(
+            1,
+            min(20, (limit + len(section_categories) - 1) // len(section_categories)),
+        )
+        sections: list[HomeRecommendationSection] = []
+        seen_skus: set[str] = set()
+        remaining = limit
+
+        for index, category in enumerate(section_categories):
+            if remaining <= 0:
+                break
+            discovery_session = session.model_copy(
+                deep=True,
+                update={"category": category, "customer_context": context},
+            )
+            discovery_request = request.model_copy(
+                update={
+                    "message": (
+                        f"Recommend {category} for this customer's homepage"
+                        if category
+                        else "Recommend products for this customer's homepage"
+                    )
+                }
+            )
+            discovery_state: NeuTailState = {
+                **state,
+                "request": discovery_request,
+                "session": discovery_session,
+                "customer_context": context,
+                "discovery_max_results": min(per_section_limit, remaining),
+                "discovery_allow_llm_explanations": False,
+            }
+            if category:
+                discovery_state["discovery_criteria"] = {"category": category}
+
+            discovery_agent_result = await self.agent_registry.invoke(
+                AgentName.DISCOVERY,
+                discovery_state,
+                tool_catalog[AgentName.DISCOVERY],
+            )
+            payload = discovery_agent_result.state_updates.get("discovery_result")
+            if not isinstance(payload, dict):
+                raise OrchestratorDependencyError(
+                    "Discovery did not return homepage recommendations"
+                )
+            discovery = DiscoveryResult.model_validate(payload)
+            if discovery.status == "FAILED":
+                raise OrchestratorDependencyError(
+                    "Discovery is unavailable for homepage recommendations"
+                )
+
+            products: list[HomeRecommendationProduct] = []
+            for item in discovery.recommendations:
+                if item.sku in seen_skus or remaining <= 0:
+                    continue
+                seen_skus.add(item.sku)
+                reason_codes = list(item.reason_codes)
+                category_reason = (
+                    "CATEGORY_AFFINITY"
+                    if strategy == "CATEGORY_AFFINITY"
+                    else "PROFILE_CATEGORY_PREFERENCE"
+                    if strategy == "PROFILE_PREFERENCE"
+                    else "PROFILE_PERSONALIZATION"
+                )
+                if category_reason not in reason_codes:
+                    reason_codes.insert(0, category_reason)
+                products.append(
+                    HomeRecommendationProduct(
+                        sku=item.sku,
+                        name=item.product_name,
+                        brand=item.brand,
+                        price_gbp=item.price_gbp,
+                        image_url=item.image_url,
+                        recommended_score=item.score,
+                        reason_codes=reason_codes,
+                        available_sizes=item.available_sizes,
+                        category=item.category,
+                        color=item.color,
+                        style=item.style,
+                    )
+                )
+                remaining -= 1
+
+            if products:
+                section_id = (
+                    "category-"
+                    + "-".join(category.casefold().split())
+                    if category
+                    else "picked-for-you"
+                )
+                title = (
+                    f"{category} picked for you"
+                    if category
+                    else "Picked for you"
+                )
+                sections.append(
+                    HomeRecommendationSection(
+                        section_id=f"{section_id}-{index + 1}",
+                        title=title,
+                        category=category,
+                        products=products,
+                    )
+                )
+
+        return HomeRecommendationsResponse(
+            recommendation_id=f"HOME-{uuid4().hex}",
+            trace_id=trace_id,
+            generated_at=utc_now(),
+            status="SUCCESS" if sections else "NO_RESULTS",
+            strategy=strategy,
+            categories_used=categories,
+            sections=sections,
+        )
+
+    @staticmethod
+    def _unique_values(values: list[str]) -> list[str]:
+        unique: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            normalized = value.strip()
+            key = normalized.casefold()
+            if normalized and key not in seen:
+                seen.add(key)
+                unique.append(normalized)
+        return unique
 
     @traceable(
         name="neutail_orchestrator_upsell_trigger",

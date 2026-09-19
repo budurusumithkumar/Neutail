@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from agents.discovery import DiscoveryAgent, DiscoveryRequest
+from agents.discovery import DiscoveryAgent, DiscoveryCriteria, DiscoveryRequest
 from agents.fit import FitAgent, FitRequest
 from agents.profiling import ProfileAgent, ProfileAgentRequest
 from agents.upsell import (
@@ -97,12 +97,24 @@ class DiscoveryAgentAdapter:
             )
 
         request = state["request"]
+        criteria_payload = state.get("discovery_criteria")
+        criteria = (
+            DiscoveryCriteria.model_validate(criteria_payload)
+            if criteria_payload is not None
+            else None
+        )
+        max_results = state.get("discovery_max_results", 5)
         result = await self.agent.execute(
             DiscoveryRequest(
                 query=request.message,
                 customer_context=state["customer_context"],
                 session_context=state["session"],
+                criteria=criteria,
                 trace_id=request.trace_id,
+                max_results=max_results,
+                allow_llm_explanations=state.get(
+                    "discovery_allow_llm_explanations", True
+                ),
             )
         )
         successful = result.status in {"SUCCESS", "NO_RESULTS"}

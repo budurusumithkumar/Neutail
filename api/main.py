@@ -21,6 +21,7 @@ from agents.profiling import (
 )
 from api.auth import get_authenticated_customer_id, router as auth_router
 from api.customers import router as customers_router
+from api.recommendations import router as recommendations_router
 from api.sessions import router as sessions_router
 from api.upsell import UpsellAwareChatResponse, router as upsell_router
 from models.dto import CustomerContext
@@ -118,6 +119,7 @@ app.add_middleware(
 )
 app.include_router(auth_router)
 app.include_router(customers_router)
+app.include_router(recommendations_router)
 app.include_router(sessions_router)
 app.include_router(upsell_router)
 

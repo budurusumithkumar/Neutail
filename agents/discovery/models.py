@@ -48,6 +48,7 @@ class DiscoveryRequest(DTOModel):
     criteria: Optional[DiscoveryCriteria] = None
     trace_id: Optional[str] = None
     max_results: int = Field(default=5, ge=1, le=20)
+    allow_llm_explanations: bool = True
 
 
 class RankingScore(DTOModel):
@@ -73,6 +74,7 @@ class ProductRecommendation(DTOModel):
     product_name: str
     price_gbp: float = Field(ge=0)
     brand: str
+    image_url: Optional[str] = None
     score: float = Field(ge=0, le=1)
     reason_codes: list[str] = Field(default_factory=list)
     explanation: Optional[str] = None

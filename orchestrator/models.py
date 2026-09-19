@@ -144,6 +144,9 @@ class NeuTailState(TypedDict, total=False):
     tool_catalog: dict[AgentName, list[ToolDescriptor]]
     execution_plan: ExecutionPlan
     customer_context: CustomerContext
+    discovery_criteria: dict[str, Any]
+    discovery_max_results: int
+    discovery_allow_llm_explanations: bool
     discovery_result: dict[str, Any]
     fit_result: dict[str, Any]
     upsell_trigger: dict[str, Any]
