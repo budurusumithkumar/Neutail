@@ -11,7 +11,7 @@ from agents.profiling import ProfileAgent, ProfileAgentRequest
 from models.dto import CustomerContext
 from models.events import PurchaseCompletedEvent, PurchaseEventResult
 from services.commerce_event_service import CommerceEventService
-from services.outbox_service import OutboxService
+from services.context_bus import ContextBusDispatcher
 from services.session_context_service import SessionContextService
 from tools.runtime import get_runtime
 
@@ -58,9 +58,11 @@ class PurchaseEventGraph:
         *,
         profile_agent: ProfileAgent,
         session_service: SessionContextService,
+        context_bus: ContextBusDispatcher,
     ) -> None:
         self.profile_agent = profile_agent
         self.session_service = session_service
+        self.context_bus = context_bus
         self.graph = self._build_graph()
 
     @traceable(
@@ -95,14 +97,12 @@ class PurchaseEventGraph:
     def _build_graph(self):
         builder = StateGraph(PurchaseEventState)
         builder.add_node("process_purchase", self._process_purchase)
-        builder.add_node("invalidate_context", self._invalidate_context)
+        builder.add_node("dispatch_context_bus", self._dispatch_context_bus)
         builder.add_node("refresh_profile", self._refresh_profile)
-        builder.add_node("dispatch_outbox", self._dispatch_outbox)
         builder.add_edge(START, "process_purchase")
-        builder.add_edge("process_purchase", "invalidate_context")
-        builder.add_edge("invalidate_context", "refresh_profile")
-        builder.add_edge("refresh_profile", "dispatch_outbox")
-        builder.add_edge("dispatch_outbox", END)
+        builder.add_edge("process_purchase", "dispatch_context_bus")
+        builder.add_edge("dispatch_context_bus", "refresh_profile")
+        builder.add_edge("refresh_profile", END)
         return builder.compile()
 
     async def _process_purchase(
@@ -115,13 +115,23 @@ class PurchaseEventGraph:
             )
         return {"result": result}
 
-    async def _invalidate_context(
+    async def _dispatch_context_bus(
         self, state: PurchaseEventState
     ) -> dict[str, Any]:
-        customer_id = state["event"].customer_id
-        await self.profile_agent.clear_customer(customer_id)
-        count = self.session_service.invalidate_customer_context(customer_id)
-        return {"invalidated_sessions": count}
+        outbox_ids = state["result"].outbox_ids
+        deliveries = await self.context_bus.dispatch(outbox_ids)
+        invalidated = sum(
+            int(
+                subscribers.get("profile_context_projection", {}).get(
+                    "invalidated_sessions", 0
+                )
+            )
+            for subscribers in deliveries.values()
+        )
+        return {
+            "invalidated_sessions": invalidated,
+            "published_outbox_events": len(deliveries),
+        }
 
     async def _refresh_profile(
         self, state: PurchaseEventState
@@ -139,15 +149,5 @@ class PurchaseEventGraph:
             update={"customer_context": context}
         )
         return {"customer_context": context, "result": result}
-
-    async def _dispatch_outbox(
-        self, state: PurchaseEventState
-    ) -> dict[str, Any]:
-        with get_runtime().session(write=True) as session:
-            published = OutboxService(session).mark_published(
-                state["result"].outbox_ids
-            )
-        return {"published_outbox_events": published}
-
 
 __all__ = ["PurchaseEventGraph", "PurchaseEventState"]

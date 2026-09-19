@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from models.entities import EventInbox, OutboxEvent
+from models.entities import EventInbox, OutboxDelivery, OutboxEvent
 
 
 class EventRepository:
@@ -20,6 +20,16 @@ class EventRepository:
 
     def get_outbox(self, outbox_id: str) -> OutboxEvent | None:
         return self._session.get(OutboxEvent, outbox_id)
+
+    def get_delivery(
+        self, outbox_id: str, subscriber_name: str
+    ) -> OutboxDelivery | None:
+        return self._session.get(
+            OutboxDelivery, (outbox_id, subscriber_name)
+        )
+
+    def add_delivery(self, delivery: OutboxDelivery) -> None:
+        self._session.add(delivery)
 
     def pending_outbox(self, limit: int = 100) -> list[OutboxEvent]:
         statement = (

@@ -126,36 +126,41 @@ class CustomerSegmentationService:
                     changed_at=changed_at,
                 )
             )
-            outbox_id = f"OUT-{uuid4().hex}"
-            outbox_ids.append(outbox_id)
-            payload = {
-                "customer_id": customer.customer_id,
-                "previous_segment": previous_segment,
-                "new_segment": new_segment,
-                "previous_loyalty_status": previous_loyalty,
-                "new_loyalty_status": new_loyalty,
-                "purchase_count_90d": purchase_count,
-                "profile_version": customer.profile_version,
-                "policy_version": self.policy.version,
-                "source_event_id": source_event_id,
-                "changed_at": changed_at.isoformat(),
-            }
-            self._session.add(
-                OutboxEvent(
-                    outbox_id=outbox_id,
-                    aggregate_type="CUSTOMER",
-                    aggregate_id=customer.customer_id,
-                    event_type="CUSTOMER_SEGMENT_CHANGED",
-                    schema_version=1,
-                    payload_json=json.dumps(payload, sort_keys=True),
-                    trace_id=trace_id,
-                    causation_id=source_event_id,
-                    correlation_id=trace_id,
-                    status="PENDING",
-                    attempt_count=0,
-                    created_at=changed_at,
-                )
+
+        outbox_id = f"OUT-{uuid4().hex}"
+        outbox_ids.append(outbox_id)
+        payload = {
+            "customer_id": customer.customer_id,
+            "previous_segment": previous_segment,
+            "new_segment": new_segment,
+            "previous_loyalty_status": previous_loyalty,
+            "new_loyalty_status": new_loyalty,
+            "purchase_count_90d": purchase_count,
+            "profile_version": customer.profile_version,
+            "policy_version": self.policy.version,
+            "source_event_id": source_event_id,
+            "changed_at": changed_at.isoformat(),
+        }
+        self._session.add(
+            OutboxEvent(
+                outbox_id=outbox_id,
+                aggregate_type="CUSTOMER",
+                aggregate_id=customer.customer_id,
+                event_type=(
+                    "CUSTOMER_SEGMENT_CHANGED"
+                    if changed
+                    else "CUSTOMER_PROFILE_UPDATED"
+                ),
+                schema_version=1,
+                payload_json=json.dumps(payload, sort_keys=True),
+                trace_id=trace_id,
+                causation_id=source_event_id,
+                correlation_id=trace_id,
+                status="PENDING",
+                attempt_count=0,
+                created_at=changed_at,
             )
+        )
 
         return SegmentationOutcome(
             transition=SegmentTransition(

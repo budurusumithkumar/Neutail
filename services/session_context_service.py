@@ -91,6 +91,31 @@ class SessionContextService:
             self._contexts[session_id] = context.model_copy(deep=True)
             return context.model_copy(deep=True)
 
+    def ensure_context(
+        self,
+        session_id: str,
+        customer_id: str,
+        *,
+        attributes: Optional[dict[str, Any]] = None,
+    ) -> SessionContext:
+        """Return and persist a known-ID context for durable event recovery."""
+
+        normalized_session = self._required(session_id, "session_id")
+        normalized_customer = self._required(customer_id, "customer_id")
+        with self._lock:
+            existing = self._contexts.get(normalized_session)
+            if existing is not None:
+                if existing.customer_id != normalized_customer:
+                    raise SessionIdentityMismatchError(normalized_session)
+                return existing.model_copy(deep=True)
+            context = SessionContext(
+                session_id=normalized_session,
+                customer_id=normalized_customer,
+                attributes=dict(attributes or {}),
+            )
+            self._contexts[normalized_session] = context.model_copy(deep=True)
+            return context.model_copy(deep=True)
+
     def save_context(self, context: SessionContext) -> SessionContext:
         if not isinstance(context, SessionContext):
             context = SessionContext.model_validate(context)

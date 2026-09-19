@@ -801,6 +801,7 @@ class NeuTailOrchestrator:
                             customer_id=state["request"].customer_id,
                             session_id=state["request"].session_id,
                             result=upsell_payload,
+                            trace_id=state["request"].trace_id,
                         )
                 run.end(outputs={"status": result.status.value})
 

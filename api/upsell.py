@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal, Optional
 
@@ -20,8 +21,10 @@ from models.upsell import (
 )
 from orchestrator import NeuTailOrchestrator, OrchestratorResponse
 from services._date_utils import utc_now
+from services.context_bus import ContextBusDispatcher
 from services.engagement_event_service import (
     EngagementEventService,
+    EngagementIdempotencyConflictError,
     EngagementProductUnavailableError,
 )
 from services.session_context_service import SessionIdentityMismatchError
@@ -86,6 +89,14 @@ class EngagementEventResponse(UpsellAPIModel):
     upsell_result: Optional[UpsellResult]
 
 
+class PendingUpsellDecision(UpsellAPIModel):
+    decision_id: str
+    session_id: str
+    trace_id: Optional[str]
+    created_at: datetime
+    upsell_result: UpsellResult
+
+
 class UpsellAwareChatResponse(OrchestratorResponse):
     """Existing orchestrator response with a typed optional Upsell result."""
 
@@ -114,10 +125,17 @@ def _decision_service(request: Request) -> UpsellDecisionService:
     return request.app.state.orchestrator.upsell_decision_service
 
 
+def _context_bus(request: Request) -> ContextBusDispatcher:
+    return request.app.state.context_bus
+
+
 CustomerIdentity = Annotated[str, Depends(get_authenticated_customer_id)]
 OrchestratorDependency = Annotated[NeuTailOrchestrator, Depends(_orchestrator)]
 DecisionServiceDependency = Annotated[
     UpsellDecisionService, Depends(_decision_service)
+]
+ContextBusDependency = Annotated[
+    ContextBusDispatcher, Depends(_context_bus)
 ]
 DecisionIdPath = Annotated[str, Path(min_length=1, max_length=128)]
 
@@ -166,22 +184,8 @@ async def record_engagement_event(
     request: Request,
     customer_id: CustomerIdentity,
     orchestrator: OrchestratorDependency,
-    decisions: DecisionServiceDependency,
+    context_bus: ContextBusDependency,
 ) -> EngagementEventResponse | JSONResponse:
-    try:
-        session = orchestrator.session_service.get_context(
-            payload.session_id, customer_id
-        )
-    except SessionIdentityMismatchError:
-        session = None
-    if session is None:
-        return _error(
-            request,
-            status_code=status.HTTP_400_BAD_REQUEST,
-            error_code="INVALID_SESSION",
-            message="The session does not exist for the authenticated customer",
-        )
-
     fingerprint = json.dumps(
         {
             "customer_id": customer_id,
@@ -191,64 +195,90 @@ async def record_engagement_event(
         separators=(",", ":"),
     )
     try:
-        replay = decisions.claim_engagement_event(
-            idempotency_key=payload.idempotency_key,
-            fingerprint=fingerprint,
-        )
-    except (IdempotencyConflictError, UpsellDecisionConflictError) as exc:
+        with get_runtime().session() as database_session:
+            receipt = EngagementEventService(database_session).find_receipt(
+                customer_id=customer_id,
+                idempotency_key=payload.idempotency_key,
+                fingerprint=fingerprint,
+            )
+    except EngagementIdempotencyConflictError as exc:
         return _error(
             request,
             status_code=status.HTTP_409_CONFLICT,
             error_code="IDEMPOTENCY_CONFLICT",
             message=str(exc),
         )
-    if replay is not None:
-        return EngagementEventResponse.model_validate(replay)
+    if receipt is not None and receipt.completed_response is not None:
+        return EngagementEventResponse.model_validate(
+            receipt.completed_response
+        )
+
+    if receipt is None:
+        try:
+            session = orchestrator.session_service.get_context(
+                payload.session_id, customer_id
+            )
+        except SessionIdentityMismatchError:
+            session = None
+        if session is None:
+            return _error(
+                request,
+                status_code=status.HTTP_400_BAD_REQUEST,
+                error_code="INVALID_SESSION",
+                message=(
+                    "The session does not exist for the authenticated customer"
+                ),
+            )
 
     try:
-        with get_runtime().session(write=True) as database_session:
-            recorded = EngagementEventService(
-                database_session
-            ).record_product_view(
-                customer_id=customer_id,
-                session_id=payload.session_id,
-                sku=payload.sku,
-                metadata=payload.metadata,
-            )
+        if receipt is None:
+            with get_runtime().session(write=True) as database_session:
+                recorded = EngagementEventService(
+                    database_session
+                ).record_product_view(
+                    customer_id=customer_id,
+                    session_id=payload.session_id,
+                    sku=payload.sku,
+                    idempotency_key=payload.idempotency_key,
+                    fingerprint=fingerprint,
+                    trace_id=request.state.request_id,
+                    metadata=payload.metadata,
+                )
+        else:
+            recorded = receipt
 
-        trigger: Optional[UpsellTrigger] = None
         upsell_result: Optional[UpsellResult] = None
-        if recorded.premium_product and recorded.engagement_count == 3:
-            trigger = UpsellTrigger(
-                trigger_type="HIGH_PRODUCT_ENGAGEMENT",
-                source_agent="DiscoveryAgent",
-                sku=payload.sku,
-                strength=0.91,
-                metadata={"view_count": recorded.engagement_count},
+        if recorded.outbox_id is not None:
+            deliveries = await context_bus.dispatch([recorded.outbox_id])
+            subscriber_result = deliveries[recorded.outbox_id][
+                "upsell_high_engagement"
+            ]["upsell_result"]
+            upsell_result = _api_result(
+                DomainUpsellResult.model_validate(subscriber_result)
             )
-            result = await orchestrator.handle_upsell_trigger(
-                customer_id=customer_id,
-                session_id=payload.session_id,
-                trigger=trigger,
-                trace_id=request.state.request_id,
-            )
-            upsell_result = _api_result(result)
 
         response = EngagementEventResponse(
             event_id=recorded.event_id,
             recorded=True,
             engagement_count=recorded.engagement_count,
-            trigger=trigger,
+            trigger=recorded.trigger,
             trace_id=request.state.request_id,
             upsell_result=upsell_result,
         )
-        decisions.complete_engagement_event(
-            idempotency_key=payload.idempotency_key,
-            response=response.model_dump(mode="json"),
-        )
+        with get_runtime().session(write=True) as database_session:
+            EngagementEventService(database_session).complete(
+                recorded.receipt_id,
+                response.model_dump(mode="json"),
+            )
         return response
+    except EngagementIdempotencyConflictError as exc:
+        return _error(
+            request,
+            status_code=status.HTTP_409_CONFLICT,
+            error_code="IDEMPOTENCY_CONFLICT",
+            message=str(exc),
+        )
     except EngagementProductUnavailableError:
-        decisions.abort_engagement_event(payload.idempotency_key)
         return _error(
             request,
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -257,13 +287,34 @@ async def record_engagement_event(
             details={"sku": payload.sku},
         )
     except Exception:
-        decisions.abort_engagement_event(payload.idempotency_key)
         return _error(
             request,
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             error_code="UPSELL_EVALUATION_FAILED",
             message="The engagement could not be evaluated safely",
         )
+
+
+@router.get(
+    "/api/v1/upsell/decisions/pending",
+    response_model=list[PendingUpsellDecision],
+    operation_id="listPendingUpsellDecisions",
+    summary="List durable actionable offers for the authenticated customer",
+)
+async def list_pending_upsell_decisions(
+    customer_id: CustomerIdentity,
+    decisions: DecisionServiceDependency,
+) -> list[PendingUpsellDecision]:
+    return [
+        PendingUpsellDecision(
+            decision_id=record.decision_id,
+            session_id=record.session_id,
+            trace_id=record.trace_id,
+            created_at=record.created_at,
+            upsell_result=UpsellResult.model_validate(record.result),
+        )
+        for record in decisions.list_pending(customer_id)
+    ]
 
 
 _DECISION_STATE = {
@@ -370,6 +421,8 @@ __all__ = [
     "EngagementEventInput",
     "EngagementEventResponse",
     "EngagementEventType",
+    "list_pending_upsell_decisions",
+    "PendingUpsellDecision",
     "UpsellDecisionEventInput",
     "UpsellDecisionEventResponse",
     "UpsellDecisionEventType",

@@ -25,6 +25,7 @@ from models.entities import (  # noqa: E402
     LoyaltyTransaction,
     Order,
     OutboxEvent,
+    OutboxDelivery,
 )
 from tools.runtime import configure_runtime, get_runtime  # noqa: E402
 
@@ -142,6 +143,10 @@ def test_third_purchase_promotes_demo_customer_and_publishes_transition(
                 OutboxEvent.aggregate_id == customer_id
             )
         ).one()
+        delivery = session.get(
+            OutboxDelivery,
+            (outbox.outbox_id, "profile_context_projection"),
+        )
         order_count = session.scalar(
             select(func.count(Order.order_id)).where(
                 Order.customer_id == customer_id
@@ -164,6 +169,9 @@ def test_third_purchase_promotes_demo_customer_and_publishes_transition(
         assert outbox.event_type == "CUSTOMER_SEGMENT_CHANGED"
         assert outbox.status == "PUBLISHED"
         assert outbox.attempt_count == 1
+        assert delivery is not None
+        assert delivery.status == "COMPLETED"
+        assert delivery.attempt_count == 1
         assert order_count == 3
         assert points_transaction_count == 0
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from time import perf_counter
@@ -41,6 +42,11 @@ from orchestrator.purchase_event_graph import PurchaseEventGraph
 from services.session_context_service import (
     SessionContextService,
     SessionIdentityMismatchError,
+)
+from services.context_bus import (
+    ContextBusDispatcher,
+    HighProductEngagementSubscriber,
+    ProfileContextSubscriber,
 )
 from tools.contracts import ToolDescriptor
 from tools.permissions import AgentName
@@ -99,11 +105,45 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         llm_gateway=llm_gateway,
         session_service=session_service,
     )
-    app.state.purchase_event_graph = PurchaseEventGraph(
+    context_bus = ContextBusDispatcher()
+    profile_subscriber = ProfileContextSubscriber(
         profile_agent=profile_agent,
         session_service=session_service,
     )
-    yield
+    context_bus.subscribe(
+        "CUSTOMER_SEGMENT_CHANGED",
+        profile_subscriber.name,
+        profile_subscriber,
+    )
+    context_bus.subscribe(
+        "CUSTOMER_PROFILE_UPDATED",
+        profile_subscriber.name,
+        profile_subscriber,
+    )
+    upsell_subscriber = HighProductEngagementSubscriber(
+        orchestrator=app.state.orchestrator
+    )
+    context_bus.subscribe(
+        "HIGH_PRODUCT_ENGAGEMENT",
+        upsell_subscriber.name,
+        upsell_subscriber,
+    )
+    app.state.context_bus = context_bus
+    app.state.purchase_event_graph = PurchaseEventGraph(
+        profile_agent=profile_agent,
+        session_service=session_service,
+        context_bus=context_bus,
+    )
+    stop_context_bus = asyncio.Event()
+    context_bus_task = asyncio.create_task(
+        context_bus.run(stop_context_bus),
+        name="neutail-context-bus",
+    )
+    try:
+        yield
+    finally:
+        stop_context_bus.set()
+        await context_bus_task
 
 
 app = FastAPI(

@@ -33,6 +33,15 @@ loyalty policy, written to segment history and a transactional outbox, and then
 used to invalidate and refresh the Profiling Agent context. LangGraph owns the
 workflow and LangSmith can trace each stage.
 
+The Shared Context Bus is simulated with the same SQLite database rather than
+an external broker. Domain services commit an `outbox_events` row with their
+business change; the in-process dispatcher records one idempotent
+`outbox_deliveries` row per subscriber and marks the event published only after
+all registered subscribers complete. It drains immediately for API responses
+and continues polling pending rows in the FastAPI lifespan for restart
+recovery. Current subscribers invalidate customer/profile context and route
+durable high-product-engagement signals to the Upsell Agent.
+
 ## Run
 
 ```bash
@@ -231,8 +240,19 @@ curl -X POST "http://127.0.0.1:8000/api/v1/engagement/events" \
 
 Change the final `view-1` suffix to `view-2` and `view-3` for the next two
 calls. The third view returns a `HIGH_PRODUCT_ENGAGEMENT` trigger and a governed
-`upsell_result` when the customer is eligible. Keep its `decision_id` in UI
-state.
+`upsell_result` when the customer is eligible. Product availability is checked
+before a view is counted. The view receipt, context-bus delivery, and actionable
+decision are durable and idempotent; the signal source is
+`EngagementService`, not the Discovery Agent.
+
+Actionable offers can be restored after a page or API restart:
+
+```bash
+curl "http://127.0.0.1:8000/api/v1/upsell/decisions/pending" \
+  -H "authorization: Bearer ${NEUTAIL_DEMO_TOKEN}"
+```
+
+NeutailUI polls this endpoint and reconciles results by `decision_id`.
 
 Only an explicit UI action may resolve that decision:
 

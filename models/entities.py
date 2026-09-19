@@ -407,12 +407,116 @@ class OutboxEvent(Base):
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
+class OutboxDelivery(Base):
+    """Per-subscriber delivery state for the SQLite context-bus simulation."""
+
+    __tablename__ = "outbox_deliveries"
+    __table_args__ = (
+        Index("idx_outbox_delivery_status", "status", "updated_at"),
+    )
+
+    outbox_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("outbox_events.outbox_id"), primary_key=True
+    )
+    subscriber_name: Mapped[str] = mapped_column(Text, primary_key=True)
+    status: Mapped[str] = mapped_column(Text)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    response_json: Mapped[Optional[str]] = mapped_column(Text)
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class EngagementEventReceipt(Base):
+    """Durable UI idempotency record for one product-view request."""
+
+    __tablename__ = "engagement_event_receipts"
+    __table_args__ = (
+        Index(
+            "idx_engagement_receipt_customer_key",
+            "customer_id",
+            "idempotency_key",
+            unique=True,
+        ),
+        Index("idx_engagement_receipt_status", "status", "updated_at"),
+    )
+
+    receipt_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    customer_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("customers.customer_id"), index=True
+    )
+    session_id: Mapped[str] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(Text)
+    fingerprint: Mapped[str] = mapped_column(Text)
+    event_id: Mapped[str] = mapped_column(Text, unique=True)
+    sku: Mapped[str] = mapped_column(Text)
+    engagement_count: Mapped[int] = mapped_column(Integer)
+    premium_product: Mapped[bool] = mapped_column(Boolean)
+    trigger_json: Mapped[Optional[str]] = mapped_column(Text)
+    outbox_id: Mapped[Optional[str]] = mapped_column(
+        Text, ForeignKey("outbox_events.outbox_id"), unique=True
+    )
+    status: Mapped[str] = mapped_column(Text)
+    response_json: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class UpsellDecisionRecordEntity(Base):
+    """Durable actionable Upsell decision displayed by NeutailUI."""
+
+    __tablename__ = "upsell_decisions"
+    __table_args__ = (
+        Index(
+            "idx_upsell_decisions_customer_status",
+            "customer_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+    decision_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    customer_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("customers.customer_id"), index=True
+    )
+    session_id: Mapped[str] = mapped_column(Text)
+    offer_type: Mapped[str] = mapped_column(Text)
+    trigger_type: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    result_json: Mapped[str] = mapped_column(Text)
+    source_event_id: Mapped[Optional[str]] = mapped_column(Text, unique=True)
+    trace_id: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+class UpsellDecisionEventRecord(Base):
+    """Idempotent customer response to a durable Upsell decision."""
+
+    __tablename__ = "upsell_decision_events"
+    __table_args__ = (
+        Index("idx_upsell_decision_events_decision", "decision_id"),
+    )
+
+    idempotency_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    decision_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("upsell_decisions.decision_id")
+    )
+    fingerprint: Mapped[str] = mapped_column(Text)
+    event_type: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    response_json: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime)
+
+
 __all__ = [
     "Base",
     "ClickstreamEvent",
     "Customer",
     "CustomerSegmentHistory",
     "DemoScenario",
+    "EngagementEventReceipt",
     "EventInbox",
     "FitProfile",
     "Inventory",
@@ -420,8 +524,11 @@ __all__ = [
     "LoyaltyTransaction",
     "Order",
     "OrderItem",
+    "OutboxDelivery",
     "OutboxEvent",
     "Product",
     "Return",
     "ServiceEngagement",
+    "UpsellDecisionEventRecord",
+    "UpsellDecisionRecordEntity",
 ]

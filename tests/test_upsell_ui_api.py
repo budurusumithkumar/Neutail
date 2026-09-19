@@ -19,7 +19,15 @@ os.environ["NEUTAIL_DEMO_PASSWORD"] = "test-demo-password"
 
 from api.main import app  # noqa: E402
 from database.session import DEFAULT_DATABASE_PATH  # noqa: E402
-from models.entities import ServiceEngagement  # noqa: E402
+from models.entities import (  # noqa: E402
+    ClickstreamEvent,
+    EngagementEventReceipt,
+    Inventory,
+    OutboxDelivery,
+    OutboxEvent,
+    ServiceEngagement,
+    UpsellDecisionRecordEntity,
+)
 from tools.permissions import AgentName  # noqa: E402
 from tools.runtime import configure_runtime, get_runtime  # noqa: E402
 
@@ -118,7 +126,7 @@ def test_third_premium_view_returns_offer_and_explicit_acceptance(upsell_client)
     assert third["engagement_count"] == 3
     assert third["trigger"] == {
         "trigger_type": "HIGH_PRODUCT_ENGAGEMENT",
-        "source_agent": "DiscoveryAgent",
+        "source_agent": "EngagementService",
         "sku": "SKU00006",
         "strength": 0.91,
         "metadata": {"view_count": 3},
@@ -129,6 +137,34 @@ def test_third_premium_view_returns_offer_and_explicit_acceptance(upsell_client)
     assert result["decision_id"].startswith("UPSELL-")
     assert result["llm_invoked"] is True
     assert len(gateway.calls) == 1
+
+    pending = client.get(
+        "/api/v1/upsell/decisions/pending", headers=headers
+    )
+    assert pending.status_code == 200
+    assert len(pending.json()) == 1
+    assert pending.json()[0]["decision_id"] == result["decision_id"]
+    assert pending.json()[0]["session_id"] == session_id
+
+    with get_runtime().session() as database_session:
+        outbox = database_session.scalars(
+            select(OutboxEvent).where(
+                OutboxEvent.event_type == "HIGH_PRODUCT_ENGAGEMENT"
+            )
+        ).one()
+        delivery = database_session.get(
+            OutboxDelivery,
+            (outbox.outbox_id, "upsell_high_engagement"),
+        )
+        decision = database_session.get(
+            UpsellDecisionRecordEntity, result["decision_id"]
+        )
+        assert outbox.status == "PUBLISHED"
+        assert outbox.attempt_count == 1
+        assert delivery is not None
+        assert delivery.status == "COMPLETED"
+        assert decision is not None
+        assert decision.source_event_id == outbox.outbox_id
 
     decision_id = result["decision_id"]
     payload = {
@@ -163,6 +199,9 @@ def test_third_premium_view_returns_offer_and_explicit_acceptance(upsell_client)
     assert second_resolution.json()["error_code"] == (
         "UPSELL_DECISION_CONFLICT"
     )
+    assert client.get(
+        "/api/v1/upsell/decisions/pending", headers=headers
+    ).json() == []
     with get_runtime().session() as database_session:
         event = database_session.scalars(
             select(ServiceEngagement).where(
@@ -233,6 +272,36 @@ def test_engagement_idempotency_and_product_fact_controls(upsell_client):
     assert unknown.json()["error_code"] == "PRODUCT_NOT_AVAILABLE"
 
 
+def test_out_of_stock_view_is_not_counted_or_published(upsell_client):
+    client, _gateway = upsell_client
+    headers = _headers(client)
+    session_id = _session(client, headers)
+    with get_runtime().session(write=True) as database_session:
+        records = database_session.scalars(
+            select(Inventory).where(Inventory.sku == "SKU00006")
+        ).all()
+        assert records
+        for record in records:
+            record.available_qty = 0
+
+    response = _view(client, headers, session_id, 1)
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "PRODUCT_NOT_AVAILABLE"
+    with get_runtime().session() as database_session:
+        assert database_session.scalars(
+            select(ClickstreamEvent).where(
+                ClickstreamEvent.session_id == session_id,
+                ClickstreamEvent.sku == "SKU00006",
+            )
+        ).all() == []
+        assert database_session.scalars(
+            select(EngagementEventReceipt).where(
+                EngagementEventReceipt.session_id == session_id
+            )
+        ).all() == []
+
+
 def test_decision_is_hidden_from_another_authenticated_customer(upsell_client):
     client, _gateway = upsell_client
     owner_headers = _headers(client)
@@ -256,6 +325,54 @@ def test_decision_is_hidden_from_another_authenticated_customer(upsell_client):
     assert response.json()["error_code"] == "UPSELL_DECISION_NOT_FOUND"
 
 
+def test_offer_and_engagement_replay_survive_application_restart(tmp_path: Path):
+    database_path = tmp_path / "upsell-restart.db"
+    shutil.copy2(DEFAULT_DATABASE_PATH, database_path)
+    database_url = f"sqlite+pysqlite:///{database_path}"
+    configure_runtime(database_url)
+    try:
+        with TestClient(app) as first_client:
+            first_client.app.state.orchestrator.agent_registry._adapters[
+                AgentName.UPSELL
+            ].agent.llm_gateway = FakeUpsellGateway()
+            first_headers = _headers(first_client)
+            session_id = _session(first_client, first_headers)
+            third = _create_offer(first_client, first_headers, session_id)
+            decision_id = third["upsell_result"]["decision_id"]
+
+        configure_runtime(database_url)
+        with TestClient(app) as restarted_client:
+            restarted_headers = _headers(restarted_client)
+            pending = restarted_client.get(
+                "/api/v1/upsell/decisions/pending",
+                headers=restarted_headers,
+            )
+            replay = _view(
+                restarted_client,
+                restarted_headers,
+                session_id,
+                3,
+            )
+            accepted = restarted_client.post(
+                f"/api/v1/upsell/decisions/{decision_id}/events",
+                headers=restarted_headers,
+                json={
+                    "session_id": session_id,
+                    "event_type": "OFFER_ACCEPTED",
+                    "idempotency_key": f"{decision_id}-restart-accept",
+                },
+            )
+
+            assert pending.status_code == 200
+            assert pending.json()[0]["decision_id"] == decision_id
+            assert replay.status_code == 200
+            assert replay.json() == third
+            assert accepted.status_code == 200
+            assert accepted.json()["state"] == "INTEREST_RECORDED"
+    finally:
+        configure_runtime()
+
+
 def test_upsell_ui_openapi_contract(upsell_client):
     client, _gateway = upsell_client
     schema = client.get("/openapi.json").json()
@@ -264,12 +381,18 @@ def test_upsell_ui_openapi_contract(upsell_client):
     decision = schema["paths"][
         "/api/v1/upsell/decisions/{decision_id}/events"
     ]["post"]
+    pending = schema["paths"][
+        "/api/v1/upsell/decisions/pending"
+    ]["get"]
     chat = schema["paths"]["/api/v1/chat"]["post"]
 
     assert engagement["operationId"] == "recordEngagementEvent"
     assert decision["operationId"] == "recordUpsellDecisionEvent"
+    assert pending["operationId"] == "listPendingUpsellDecisions"
     assert chat["operationId"] == "chatWithUpsellResult"
-    assert engagement["security"] == decision["security"] == [
+    assert engagement["security"] == decision["security"] == pending[
+        "security"
+    ] == [
         {"BearerAuth": []}
     ]
     required = schema["components"]["schemas"]["UpsellResult"][
