@@ -21,6 +21,7 @@ from agents.profiling import (
 )
 from api.auth import get_authenticated_customer_id, router as auth_router
 from api.customers import router as customers_router
+from api.events import demo_router, internal_router
 from api.recommendations import router as recommendations_router
 from api.sessions import router as sessions_router
 from api.upsell import UpsellAwareChatResponse, router as upsell_router
@@ -36,6 +37,7 @@ from orchestrator import (
     OrchestratorRequest,
     OrchestratorResponse,
 )
+from orchestrator.purchase_event_graph import PurchaseEventGraph
 from services.session_context_service import (
     SessionContextService,
     SessionIdentityMismatchError,
@@ -90,11 +92,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     profile_agent = ProfileAgent()
     llm_gateway = LLMGateway()
     agent_registry = AgentRegistry(profile_agent, llm_gateway=llm_gateway)
+    session_service = SessionContextService()
     app.state.profile_agent = profile_agent
     app.state.orchestrator = NeuTailOrchestrator(
         agent_registry=agent_registry,
         llm_gateway=llm_gateway,
-        session_service=SessionContextService(),
+        session_service=session_service,
+    )
+    app.state.purchase_event_graph = PurchaseEventGraph(
+        profile_agent=profile_agent,
+        session_service=session_service,
     )
     yield
 
@@ -119,6 +126,8 @@ app.add_middleware(
 )
 app.include_router(auth_router)
 app.include_router(customers_router)
+app.include_router(demo_router)
+app.include_router(internal_router)
 app.include_router(recommendations_router)
 app.include_router(sessions_router)
 app.include_router(upsell_router)

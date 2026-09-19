@@ -47,6 +47,8 @@ class Customer(Base):
     fit_preference: Mapped[Optional[str]] = mapped_column(Text)
     marketing_consent: Mapped[Optional[bool]] = mapped_column(Boolean)
     golden_demo_customer: Mapped[Optional[bool]] = mapped_column(Boolean)
+    profile_version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     loyalty: Mapped[Optional["Loyalty"]] = relationship(
         back_populates="customer", uselist=False
@@ -86,6 +88,8 @@ class Loyalty(Base):
     streak_days: Mapped[Optional[int]] = mapped_column(Integer)
     next_tier_points: Mapped[Optional[int]] = mapped_column(Integer)
     last_activity_date: Mapped[Optional[date]] = mapped_column(Date)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     customer: Mapped[Customer] = relationship(back_populates="loyalty")
 
@@ -171,6 +175,12 @@ class Order(Base):
     __tablename__ = "orders"
     __table_args__ = (
         Index("idx_orders_customer_date", "customer_id", "order_datetime"),
+        Index(
+            "idx_orders_customer_date_status",
+            "customer_id",
+            "order_datetime",
+            "status",
+        ),
     )
 
     order_id: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -185,6 +195,7 @@ class Order(Base):
     total_gbp: Mapped[Optional[float]] = mapped_column(Float)
     payment_type: Mapped[Optional[str]] = mapped_column(Text)
     status: Mapped[Optional[str]] = mapped_column(Text)
+    source_event_id: Mapped[Optional[str]] = mapped_column(Text, unique=True)
 
     customer: Mapped[Optional[Customer]] = relationship(back_populates="orders")
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order")
@@ -331,17 +342,85 @@ class DemoScenario(Base):
     )
 
 
+class EventInbox(Base):
+    """Durable idempotency and replay record for trusted domain events."""
+
+    __tablename__ = "event_inbox"
+    __table_args__ = (Index("idx_event_inbox_status", "status"),)
+
+    event_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    event_type: Mapped[str] = mapped_column(Text, index=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    payload_json: Mapped[str] = mapped_column(Text)
+    payload_hash: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=1)
+    result_json: Mapped[Optional[str]] = mapped_column(Text)
+    error_code: Mapped[Optional[str]] = mapped_column(Text)
+    received_at: Mapped[datetime] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class CustomerSegmentHistory(Base):
+    """Auditable, event-correlated customer segment transition."""
+
+    __tablename__ = "customer_segment_history"
+    __table_args__ = (
+        Index("idx_segment_history_customer", "customer_id", "changed_at"),
+    )
+
+    segment_history_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    customer_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("customers.customer_id"), index=True
+    )
+    previous_segment: Mapped[Optional[str]] = mapped_column(Text)
+    new_segment: Mapped[str] = mapped_column(Text)
+    previous_loyalty_status: Mapped[Optional[str]] = mapped_column(Text)
+    new_loyalty_status: Mapped[str] = mapped_column(Text)
+    affluence_band: Mapped[str] = mapped_column(Text)
+    purchase_count_90d: Mapped[int] = mapped_column(Integer)
+    policy_version: Mapped[str] = mapped_column(Text)
+    source_event_id: Mapped[str] = mapped_column(Text, unique=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class OutboxEvent(Base):
+    """Transactional event awaiting in-process or external dispatch."""
+
+    __tablename__ = "outbox_events"
+    __table_args__ = (
+        Index("idx_outbox_dispatch", "status", "created_at"),
+    )
+
+    outbox_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    aggregate_type: Mapped[str] = mapped_column(Text)
+    aggregate_id: Mapped[str] = mapped_column(Text, index=True)
+    event_type: Mapped[str] = mapped_column(Text, index=True)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    payload_json: Mapped[str] = mapped_column(Text)
+    trace_id: Mapped[str] = mapped_column(Text)
+    causation_id: Mapped[str] = mapped_column(Text)
+    correlation_id: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
 __all__ = [
     "Base",
     "ClickstreamEvent",
     "Customer",
+    "CustomerSegmentHistory",
     "DemoScenario",
+    "EventInbox",
     "FitProfile",
     "Inventory",
     "Loyalty",
     "LoyaltyTransaction",
     "Order",
     "OrderItem",
+    "OutboxEvent",
     "Product",
     "Return",
     "ServiceEngagement",

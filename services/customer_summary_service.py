@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from models.dto import CustomerPreferences, CustomerSummary
-from models.entities import Customer, Loyalty
+from models.entities import Customer, CustomerSegmentHistory, Loyalty
 from services.customer_profile_service import CustomerNotFoundError
 
 
@@ -31,6 +31,15 @@ class CustomerSummaryService:
             raise CustomerNotFoundError(normalized_id)
 
         customer, loyalty = row
+        latest_transition = self._session.scalars(
+            select(CustomerSegmentHistory)
+            .where(CustomerSegmentHistory.customer_id == normalized_id)
+            .order_by(
+                CustomerSegmentHistory.changed_at.desc(),
+                CustomerSegmentHistory.segment_history_id.desc(),
+            )
+            .limit(1)
+        ).first()
         preferences = CustomerPreferences.model_validate(customer)
         display_name = " ".join(
             part.strip()
@@ -42,9 +51,26 @@ class CustomerSummaryService:
             display_name=display_name or customer.customer_id,
             city=customer.city,
             segment=customer.segment,
+            loyalty_status=customer.loyalty_status,
             loyalty_tier=loyalty.tier if loyalty is not None else None,
             points_balance=(
                 loyalty.points_balance if loyalty is not None else None
+            ),
+            profile_version=max(customer.profile_version or 1, 1),
+            previous_segment=(
+                latest_transition.previous_segment
+                if latest_transition is not None
+                else None
+            ),
+            segment_changed_at=(
+                latest_transition.changed_at
+                if latest_transition is not None
+                else None
+            ),
+            purchase_count_90d=(
+                latest_transition.purchase_count_90d
+                if latest_transition is not None
+                else None
             ),
             preferred_categories=preferences.preferred_categories,
             preferred_colors=preferences.preferred_colors,

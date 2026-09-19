@@ -27,6 +27,12 @@ planning, structured invocation, response synthesis, and trace propagation.
 All four specialists execute end to end. Discovery and Fit never invoke Upsell
 directly: they publish typed signals and the orchestrator owns the handoff.
 
+The profiling demo also includes a durable purchase-event workflow. A completed
+purchase is idempotently recorded, evaluated against a versioned 90-day
+loyalty policy, written to segment history and a transactional outbox, and then
+used to invalidate and refresh the Profiling Agent context. LangGraph owns the
+workflow and LangSmith can trace each stage.
+
 ## Run
 
 ```bash
@@ -58,7 +64,8 @@ starting the API:
 
 ```bash
 export NEUTAIL_JWT_SECRET="replace-with-a-long-random-demo-secret"
-export NEUTAIL_DEMO_PASSWORD="replace-with-a-demo-password"
+export NEUTAIL_DEMO_PASSWORD="demo"
+export NEUTAIL_INTERNAL_EVENT_TOKEN="replace-with-a-long-random-internal-token"
 ```
 
 Login using any seeded customer email and the configured demo password:
@@ -66,8 +73,37 @@ Login using any seeded customer email and the configured demo password:
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/v1/auth/login" \
   -H "content-type: application/json" \
-  -d '{"email":"olivia.hart1@demo.neutail.local","password":"replace-with-a-demo-password"}'
+  -d '{"email":"olivia.hart1@demo.neutail.local","password":"demo"}'
 ```
+
+### Customer profiling and segmentation demo
+
+Reset the two dedicated demo customers before presenting the sequence:
+
+```bash
+./bin/python -m database.seed_profile_demo
+```
+
+| Customer | Email | Starting facts | Third-purchase result |
+| --- | --- | --- | --- |
+| Alice Morgan | `alice.demo@demo.neutail.local` | Affluent, New, 2 purchases | Loyal, Prestige Champion |
+| Bob Reed | `bob.demo@demo.neutail.local` | Less Affluent, New, 2 purchases | Loyal, Value Defender |
+
+Sign in with the shared `demo` password, add any active product to the cart,
+and select **Complete demo purchase**. The browser calls
+`POST /api/v1/demo/checkout`; the returned committed transition is displayed in
+the cart, while Home and Profile reload the new segment. Retrying an identical
+checkout is safe because the UI reuses an idempotency key.
+
+The flow intentionally does not award or multiply points. The response carries
+`points_transaction_id=null` and `points_delta=null`, and the UI says points are
+unchanged. This prevents the demo from claiming a loyalty write that did not
+occur.
+
+For trusted server-to-server ingestion, submit the versioned
+`PURCHASE_COMPLETED` envelope to `POST /internal/v1/events` with
+`X-Internal-Token`; query its durable status at
+`GET /internal/v1/events/{event_id}`. Browser code must not use this credential.
 
 Use the response's `access_token` as the Bearer token for authenticated routes:
 

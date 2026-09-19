@@ -94,7 +94,7 @@ def publish_customer_context(
         fit_risk_score=facts.fit_risk_score,
         loyalty_points=facts.loyalty_points,
         engagement_score=facts.engagement_score,
-        profile_version="v1",
+        profile_version=f"v{snapshot.customer.profile_version}",
         data_quality=data_quality,
     )
 

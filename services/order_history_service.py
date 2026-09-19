@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from sqlalchemy import func, select
@@ -153,6 +153,34 @@ class OrderHistoryService:
             common_sizes=self._top_values(size_counts),
             channel_mix=channel_mix,
         )
+
+    def count_completed_purchases(
+        self,
+        customer_id: str,
+        *,
+        as_of: datetime,
+        window_days: int = 90,
+        statuses: frozenset[str] = frozenset({"COMPLETED", "DELIVERED"}),
+    ) -> int:
+        """Count qualifying orders in a deterministic rolling-day window."""
+
+        normalized_customer_id = self._normalize_customer_id(customer_id)
+        validate_positive_int(window_days, "window_days")
+        normalized_statuses = {
+            value.strip().upper()
+            for value in statuses
+            if isinstance(value, str) and value.strip()
+        }
+        if not normalized_statuses:
+            raise ValueError("statuses must include at least one status")
+        cutoff = as_of - timedelta(days=window_days)
+        statement = select(func.count(OrderEntity.order_id)).where(
+            OrderEntity.customer_id == normalized_customer_id,
+            func.datetime(OrderEntity.order_datetime) >= sqlite_datetime(cutoff),
+            func.datetime(OrderEntity.order_datetime) <= sqlite_datetime(as_of),
+            func.upper(OrderEntity.status).in_(normalized_statuses),
+        )
+        return int(self._session.scalar(statement) or 0)
 
     def get_recent_sizes(
         self, customer_id: str, category: Optional[str] = None

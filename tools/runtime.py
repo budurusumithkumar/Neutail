@@ -10,6 +10,7 @@ from typing import Optional
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from database.migrations import ensure_schema
 from database.session import create_session_factory
 from services.upsell_policy_service import UpsellPolicyState
 
@@ -19,6 +20,7 @@ class ToolRuntime:
 
     def __init__(self, database_url: Optional[str] = None) -> None:
         self.engine, self.session_factory = create_session_factory(database_url)
+        ensure_schema(self.engine)
         self.upsell_policy_state = UpsellPolicyState()
 
     engine: Engine

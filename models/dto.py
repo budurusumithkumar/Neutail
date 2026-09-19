@@ -104,6 +104,7 @@ class CustomerMaster(DTOModel):
     city: Optional[str] = None
     country: Optional[str] = None
     join_date: Optional[date] = None
+    profile_version: int = Field(default=1, ge=1)
 
 
 class CustomerPreferences(DTOModel):
@@ -185,8 +186,13 @@ class CustomerSummary(DTOModel):
     display_name: str
     city: Optional[str] = None
     segment: Optional[str] = None
+    loyalty_status: Optional[str] = None
     loyalty_tier: Optional[str] = None
     points_balance: Optional[int] = None
+    profile_version: int = Field(default=1, ge=1)
+    previous_segment: Optional[str] = None
+    segment_changed_at: Optional[datetime] = None
+    purchase_count_90d: Optional[int] = Field(default=None, ge=0)
     preferred_categories: list[str] = Field(default_factory=list)
     preferred_colors: list[str] = Field(default_factory=list)
     preferred_styles: list[str] = Field(default_factory=list)

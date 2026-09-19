@@ -122,6 +122,25 @@ class SessionContextService:
             del self._contexts[normalized_session]
             return True
 
+    def invalidate_customer_context(self, customer_id: str) -> int:
+        """Drop stale profile projections while preserving conversations."""
+
+        normalized_customer = self._required(customer_id, "customer_id")
+        invalidated = 0
+        with self._lock:
+            for session_id, context in list(self._contexts.items()):
+                if context.customer_id != normalized_customer:
+                    continue
+                self._contexts[session_id] = context.model_copy(
+                    deep=True,
+                    update={
+                        "customer_context": None,
+                        "updated_at": datetime.now(timezone.utc),
+                    },
+                )
+                invalidated += 1
+        return invalidated
+
     @staticmethod
     def _required(value: object, field_name: str) -> str:
         if not isinstance(value, str) or not value.strip():

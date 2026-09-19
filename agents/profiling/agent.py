@@ -206,6 +206,15 @@ class ProfileAgent:
             for key in keys:
                 del self._cache[key]
 
+    async def clear_customer(self, customer_id: str) -> None:
+        """Invalidate every cached context owned by one customer."""
+
+        normalized = customer_id.strip()
+        async with self._cache_lock:
+            keys = [key for key in self._cache if key[1] == normalized]
+            for key in keys:
+                del self._cache[key]
+
     def _build_graph(self) -> Any:
         builder = StateGraph(ProfileGraphState)
         builder.add_node("discover_tools", self._discover_tools)
@@ -382,4 +391,3 @@ __all__ = [
     "ProfileToolDiscoveryError",
     "ProfileToolInvocationError",
 ]
-
